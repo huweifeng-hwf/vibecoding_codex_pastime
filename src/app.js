@@ -4,6 +4,7 @@ const Gomoku = require('./gomoku');
 const Memory = require('./memory');
 const Flight = require('./flight');
 const Records = require('./records');
+const { createOnline } = require('./online');
 
 const GAMES = [
   { id: 'ticTacToe', title: '井字棋', description: '2 人 · 连成三子' },
@@ -27,6 +28,9 @@ function start(platform) {
   const multiplayerRecords = new Map(GAMES.filter(game => game.rules).map(({ id }) => [
     id, new Map(PLAYER_COUNTS.map(count => [count, Records.loadMultiplayer(storage, id, count)])),
   ]));
+  const online = platform.roomCall ? createOnline(platform.roomCall, storage, render) : null;
+  let roomInput = '';
+  if (online) platform.onVisibility(value => online.visibility(value));
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
   function box(x,y,w,h,color) { ctx.fillStyle = color; ctx.fillRect(x,y,w,h); }
@@ -296,6 +300,107 @@ function start(platform) {
     text(done ? saveStatus() : '轻点空交叉点落子',cx,y+14,13,colors.muted);
     roundControls(done,left,y+33,w);
   }
+  function drawTicBoard(board, cx, y, size, onMove) {
+    const cell = size/3;
+    const bx = cx-size/2;
+    for (let i=0; i<9; i++) {
+      const x = bx+(i%3)*cell, row = y+Math.floor(i/3)*cell;
+      box(x+3,row+3,cell-6,cell-6,board.line.includes(i) ? '#3d5064' : colors.panel);
+      const piece = board.board[i];
+      if (piece) text(piece === 'X' ? '✕' : '○',x+cell/2,row+cell/2,cell*0.55,colors[piece]);
+      if (onMove && !piece) buttons.push({x,y:row,w:cell,h:cell,action:() => onMove(i)});
+    }
+  }
+
+  function returnFromOnline() {
+    online.close();
+    scene = 'home';
+    render();
+  }
+
+  function drawOnline(cx, top, left, w) {
+    const { room, code, busy, retry, message } = online.state();
+    text('井字棋 · 好友房',cx,top+58,26);
+    if (scene === 'roomCode') {
+      text(roomInput || '输入 10 位房间码',cx,top+105,21);
+      const keyWidth = (w-24)/4;
+      [...'0123456789ABCDEF'].forEach((key,i) => {
+        button(key,left+(i%4)*(keyWidth+8),top+131+Math.floor(i/4)*49,keyWidth,42,() => {
+          if (roomInput.length < 10) roomInput += key;
+          render();
+        });
+      });
+      button('删除',left,top+331,keyWidth*2+8,44,() => { roomInput = roomInput.slice(0,-1); render(); });
+      button('加入房间',left+keyWidth*2+16,top+331,keyWidth*2+8,44,() => {
+        if (roomInput.length !== 10) return;
+        scene = 'online';
+        online.action('join', { code: roomInput });
+      },roomInput.length === 10 ? '#395a69' : colors.panel);
+      button('返回',left,top+389,w,44,() => { scene = 'online'; render(); });
+      return;
+    }
+
+    if (!room) {
+      text(message || (busy ? '正在连接…' : '创建房间或输入朋友的房间码'),cx,top+106,14,colors.muted);
+      if (retry) {
+        button('重试上次操作',left,top+142,w,46,() => online.action('retry'),'#395a69');
+        button('返回大厅',left,top+200,w,46,returnFromOnline);
+      } else if (!busy) {
+        button('创建房间',left,top+142,w,46,() => online.action('create'),'#395a69');
+        button('输入房间码',left,top+200,w,46,() => { roomInput = ''; scene = 'roomCode'; render(); });
+        if (code) button('恢复房间',left,top+258,w,46,() => online.open());
+        button('检查云连接',left,top+316,w,46,() => online.action('probe'));
+        button('返回大厅',left,top+374,w,46,returnFromOnline);
+      }
+      return;
+    }
+
+    text(`房间码 ${room.code} · 你是 ${room.seat}`,cx,top+96,17);
+    const closed = room.status === 'closed' || room.status === 'interrupted';
+    const ready = room.seats[room.seat === 'X' ? 0 : 1].ready;
+    if (room.status === 'waiting') {
+      ['X','O'].forEach((seat,i) => {
+        const member = room.seats[i];
+        const state = !member ? '等待加入' : !member.online ? '暂离' : member.ready ? '已准备' : '未准备';
+        text(`${seat} · ${state}`,cx,top+145+i*42,20,colors[seat]);
+      });
+      const canStart = room.seat === 'X' && room.seats.length === 2 &&
+        room.seats.every(member => member.ready && member.online);
+      text(message || '把房间码告诉朋友',cx,top+234,14,colors.muted);
+      if (canStart && !busy) button('开始对局',left,top+260,w,48,() => online.action('start'),'#395a69');
+      else if (!ready && !busy) button('准备',left,top+260,w,48,() => online.action('ready'),'#395a69');
+      else text(busy ? '同步中…' : '等待两位玩家准备',cx,top+284,16,colors.muted);
+      if (!busy) button('离开房间',left,top+322,w,46,() => online.action('leave'));
+      return;
+    }
+
+    const playing = room.status === 'playing';
+    const other = room.seats[room.seat === 'X' ? 1 : 0];
+    const title = closed ? (room.status === 'closed' ? '房间已关闭' : '对局已中断') :
+      playing ? (room.game.turn === room.seat ? '轮到你落子' : '等待对手落子') :
+      room.game.draw ? '平局' : `${room.game.winner} 方获胜！`;
+    text(title,cx,top+131,23);
+    const by = top+155;
+    const size = Math.min(w,height-safeBottom-by-155);
+    const canPlay = playing && room.game.turn === room.seat && !busy && other.online;
+    if (room.game) drawTicBoard(room.game,cx,by,size,canPlay ? index => online.action('move',{ index }) : null);
+    const y = room.game ? by+size+10 : by+15;
+    const hint = closed ? '返回大厅后可创建新房间' :
+      !other.online ? '对手暂离，等待重连' :
+      playing ? '好友房结果独立于本机战绩' : ready ? '已准备，等待对手' : '双方准备后交换先手';
+    text(message || (busy ? '同步中…' : hint),cx,y+12,14,colors.muted);
+    if (room.status === 'finished' && !ready && !busy) {
+      button('准备再战',left,y+32,w,44,() => online.action('rematch'),'#395a69');
+    }
+    if (!busy) {
+      button(room.status === 'closed' ? '返回大厅' : '离开房间',left,y+86,w,44,() => {
+        if (room.status === 'closed') returnFromOnline();
+        else if (playing) platform.confirm('离开将中断本局，确定离开？',() => online.action('leave'));
+        else online.action('leave');
+      });
+    }
+  }
+
   function render() {
     buttons = []; box(0,0,width,height,colors.bg);
     const cx = width/2, top = Math.max(30, platform.safeTop || 0), w = Math.min(width-40,400), left = cx-w/2;
@@ -304,8 +409,15 @@ function start(platform) {
       text('双人互动小游戏大全',cx,top+76,26);
       text('一块屏幕，轮流玩，一点胜负欲。',cx,top+115,15,colors.muted);
       drawGameCards(left,top,w);
+      if (online) button('井字棋 · 好友联机',left,top+369,w,49,() => {
+        scene = 'online';
+        online.open();
+        render();
+      },'#395a69');
       button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
       text('无需登录 · 战绩仅保存在此设备',cx,top+519,13,colors.muted);
+    } else if (scene === 'online' || scene === 'roomCode') {
+      drawOnline(cx,top,left,w);
     } else if (scene === 'setup') {
       const { title, start } = GAMES.find(({ id }) => id === activeGame);
       text(title,cx,top+76,29);
@@ -354,13 +466,8 @@ function start(platform) {
       const done = game.winner || game.draw;
       text(done ? (game.draw ? '默契平局！' : `玩家 ${game.winner} 获胜！`) : `轮到玩家 ${game.turn}`,cx,top+68,28,game.winner ? colors[game.winner] : colors.ink);
       text('先连成横、竖或斜向三子即获胜',cx,top+106,14,colors.muted);
-      const size = Math.min(w, height-top-330), cell = size/3, bx = cx-size/2, by = top+140;
-      for(let i=0;i<9;i++) {
-        const x=bx+(i%3)*cell,y=by+Math.floor(i/3)*cell;
-        box(x+3,y+3,cell-6,cell-6,game.line.includes(i)?'#3d5064':colors.panel);
-        if(game.board[i]) text(game.board[i] === 'X' ? '✕' : '○',x+cell/2,y+cell/2,cell*0.55,colors[game.board[i]]);
-        buttons.push({x,y,w:cell,h:cell,action:()=>commitMove(i)});
-      }
+      const size = Math.min(w, height-top-330), by = top+140;
+      drawTicBoard(game,cx,by,size,done ? null : commitMove);
       const y=by+size+20;
       text(done ? saveStatus() : '玩家 X（暖橙） vs 玩家 O（薄荷）',cx,y,13,colors.muted);
       roundControls(done,left,y+28,w);
