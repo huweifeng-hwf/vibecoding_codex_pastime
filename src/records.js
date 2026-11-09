@@ -62,6 +62,8 @@ function loadJournal(storage) {
   return read(storage, JOURNAL_KEY, value => {
     if (!Array.isArray(value?.profiles) || !Array.isArray(value.matches)) return false;
     const validId = id => Number.isInteger(id) && id > 0 && id <= value.profiles.length;
+    if (value.archivedProfiles !== undefined &&
+        (!Array.isArray(value.archivedProfiles) || !value.archivedProfiles.every(validId))) return false;
     const inSeats = (seat, count) => Number.isInteger(seat) && seat >= 0 && seat < count;
     return value.profiles.every(name => typeof name === 'string' && name.length > 0) &&
       value.matches.every(match => {

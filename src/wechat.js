@@ -29,7 +29,7 @@ start({ canvas, safeTop: (info.safeArea && info.safeArea.top) || 30,
   prompt: (message, accept) => {
     pending = true;
     wx.showModal({
-      title: '新建本机玩家', editable: true, placeholderText: message,
+      title: '本机玩家昵称', editable: true, placeholderText: message,
       success: result => { if (result.confirm) accept(result.content ?? ''); },
       complete: () => { pending = false; },
     });
