@@ -13,7 +13,13 @@ const GAMES = [
   { id: 'flight', title: '飞行棋', description: '2–4 人 · 双机快局', start: '开始飞行', rules: Flight },
 ];
 const PLAYER_COUNTS = [2, 3, 4];
+const SEATING_KEY = 'duo.seating.v1';
 const SEAT_COLORS = ['#ffad98', '#80dfd4', '#ffd67d', '#c4b5ff'];
+const FLIGHT_COLORS = ['#ff967e', '#84dbb3', '#ffcf77', '#93baff'];
+const FLIGHT_TILES = {
+  supply: { symbol: '+', fill: '#214e46', ink: '#99f1bb' },
+  turbulence: { symbol: '−2', fill: '#593746', ink: '#ffb7b6' },
+};
 const playerLabel = seat => `玩家 ${seat + 1}`;
 const isMemoryDone = game => game.winner !== null || game.draw;
 function start(platform) {
@@ -30,6 +36,13 @@ function start(platform) {
   ]));
   const online = platform.roomCall ? createOnline(platform.roomCall, storage, render) : null;
   let roomInput = '';
+  let facing = false, seatPrompt = null, rollingFlight = null, movingFlight = null;
+  try { facing = storage.get(SEATING_KEY) === 'facing'; } catch {}
+  function toggleSeating() {
+    facing = !facing;
+    try { storage.set(SEATING_KEY, facing ? 'facing' : 'side'); } catch {}
+    render();
+  }
   if (online) platform.onVisibility(value => online.visibility(value));
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
@@ -55,6 +68,8 @@ function start(platform) {
 
   function startMultiplayer(firstSeat) {
     const { rules } = GAMES.find(({ id }) => id === activeGame);
+    rollingFlight = null;
+    movingFlight = null;
     game = rules.createGame(playerCount, firstSeat);
     scene = 'game';
     render();
@@ -72,6 +87,94 @@ function start(platform) {
     game = next;
     if (game.winner !== null) saveMultiplayer();
     render();
+  }
+
+  function rollFlight() {
+    if (rollingFlight || game.die !== null) return;
+    const round = game;
+    const die = 1+Math.floor(Math.random()*6);
+    const roll = { face: (die+1)%6+1 };
+    rollingFlight = roll;
+    render();
+
+    [die%6+1,(die+3)%6+1,die].forEach((face,i) => {
+      setTimeout(() => {
+        if (rollingFlight !== roll) return;
+        if (game !== round || scene !== 'game') {
+          rollingFlight = null;
+          return;
+        }
+        if (i === 2) {
+          rollingFlight = null;
+          playFlight(Flight.roll(round,die));
+        } else {
+          roll.face = face;
+          render();
+        }
+      }, (i+1)*90);
+    });
+  }
+
+  function moveFlight(plane) {
+    if (movingFlight) return;
+    const option = Flight.moveOption(game,plane);
+    if (!option || option.reason) return;
+
+    const round = game;
+    const next = Flight.move(round,plane);
+    const seat = round.turn;
+    const start = round.planes[seat][plane];
+    const pointAt = progress => Flight.planePoint(round.quarters[seat],plane,progress);
+    const mover = { seat, plane, point: pointAt(start) };
+    const motion = { pieces: [mover], hint: '飞行中…' };
+    const legs = [];
+    const landing = option.via ?? option.next;
+    for (let step=start+1; step<=landing; step++) {
+      legs.push({piece: mover, to: pointAt(step), frames: start === Flight.HANGAR ? 9 : 4, hint: '飞行中…'});
+    }
+    if (option.next > landing) {
+      legs.push({piece: mover, to: pointAt(option.next), frames: 10, hint: option.action});
+    }
+    for (let step=landing-1; step>=option.next; step--) {
+      legs.push({piece: mover, to: pointAt(step), frames: 6, hint: option.action});
+    }
+    if (option.capture) {
+      const target = option.capture;
+      const quarter = round.quarters[target.seat];
+      const progress = round.planes[target.seat][target.plane];
+      const piece = { ...target, point: Flight.planePoint(quarter,target.plane,progress) };
+      legs.push({piece, to: Flight.planePoint(quarter,target.plane,Flight.HANGAR),
+        frames: 11, hint: `撞回 ${target.seat+1} 号机库`});
+    }
+    movingFlight = motion;
+    render();
+
+    let index = 0, frame = 0, from = mover.point;
+    function advance() {
+      if (movingFlight !== motion) return;
+      if (game !== round || scene !== 'game') {
+        movingFlight = null;
+        return;
+      }
+      if (index === legs.length) {
+        movingFlight = null;
+        playFlight(next);
+        return;
+      }
+      const {piece,to,frames,hint} = legs[index];
+      if (frame === 0 && piece !== mover) motion.pieces.push(piece);
+      const ratio = ++frame/frames;
+      piece.point = [from[0]+(to[0]-from[0])*ratio,from[1]+(to[1]-from[1])*ratio];
+      motion.hint = hint;
+      if (frame === frames) {
+        frame = 0;
+        index++;
+        from = legs[index]?.piece.point;
+      }
+      render();
+      setTimeout(advance,25);
+    }
+    setTimeout(advance,25);
   }
 
   function flipCard(index) {
@@ -106,7 +209,7 @@ function start(platform) {
     render();
   }
 
-  function roundControls(done, left, y, w) {
+  function roundActions(done, confirm = platform.confirm) {
     const restart = () => {
       if (multiplayerRecords.has(activeGame)) {
         startMultiplayer(done ? (game.first + 1) % playerCount : game.first);
@@ -119,16 +222,18 @@ function start(platform) {
       }
       newRound();
     };
+    const leave = () => { scene = 'home'; render(); };
+    return {
+      restart: () => done ? restart() : confirm('重新开局？未完成的对局不计入战绩。', restart),
+      leave: () => done ? leave() : confirm('离开本局？未完成的对局不计入战绩。', leave),
+    };
+  }
+
+  function roundControls(done, left, y, w) {
+    const actions = roundActions(done);
     const rematch = multiplayerRecords.has(activeGame) ? '再来一局 · 轮换先手' : '再来一局 · 交换先手';
-    button(done ? rematch : '重新开局（不计战绩）', left,y,w,48,() => {
-      if (done) restart();
-      else platform.confirm('重新开局？未完成的对局不计入战绩。', restart);
-    });
-    button('返回大厅',left,y+61,w,46,() => {
-      const go = () => { scene = 'home'; render(); };
-      if (done) go();
-      else platform.confirm('离开本局？未完成的对局不计入战绩。', go);
-    });
+    button(done ? rematch : '重新开局（不计战绩）',left,y,w,48,actions.restart);
+    button('返回大厅',left,y+61,w,46,actions.leave);
   }
 
   function saveStatus() {
@@ -167,6 +272,14 @@ function start(platform) {
 
     const by = top+113;
     const size = Math.min(w,height-safeBottom-by-165);
+    drawMemoryBoard(cx,by,size,!done);
+    const y = by+size+12;
+    const hint = game.open.length === 2 ? '未配对，即将换人' : '每次翻两张，配对成功可继续';
+    text(done ? saveStatus() : hint,cx,y+14,13,colors.muted);
+    roundControls(done,left,y+33,w);
+  }
+
+  function drawMemoryBoard(cx, by, size, playable) {
     const bx = cx-size/2;
     const cell = size/Memory.GRID_SIZE;
     game.cards.forEach((symbol,i) => {
@@ -179,81 +292,230 @@ function start(platform) {
       text(matched || open ? symbol : '?',x+cell/2,y+cell*(matched ? 0.40 : 0.50),
         cell*0.43,matched || open ? colors.bg : colors.muted);
       if (matched) text(`${owner+1} 号`,x+cell/2,y+cell*0.76,12,colors.bg);
-      if (!done && !matched && !open && game.open.length < 2) {
+      if (playable && !matched && !open && game.open.length < 2) {
         buttons.push({x,y,w:cell,h:cell,action:() => flipCard(i)});
       }
     });
-    const y = by+size+12;
-    const hint = game.open.length === 2 ? '未配对，即将换人' : '每次翻两张，配对成功可继续';
-    text(done ? saveStatus() : hint,cx,y+14,13,colors.muted);
-    roundControls(done,left,y+33,w);
   }
 
   function drawFlight(cx, top, left, w) {
     const done = game.winner !== null;
-    text(done ? `${playerLabel(game.winner)}获胜！` : `轮到${playerLabel(game.turn)}`,cx,top+58,26);
+    const activeColor = FLIGHT_COLORS[game.turn];
+    text(done ? `${playerLabel(game.winner)}获胜！` : `轮到${playerLabel(game.turn)}`,cx,top+58,26,activeColor);
     game.planes.forEach((pair,seat) => {
       const arrived = pair.filter(progress => progress === Flight.FINISH).length;
-      text(`${seat+1} 号 · ${arrived}/2`,left+(seat+0.5)*w/playerCount,top+92,14,SEAT_COLORS[seat]);
+      const tile = w/playerCount;
+      const x = left+seat*tile;
+      box(x+2,top+81,tile-4,26,seat === game.turn && !done ? '#344461' : colors.panel);
+      box(x+2,top+81,tile-4,2,FLIGHT_COLORS[seat]);
+      text(`${seat+1} 号 · ${arrived}/2`,x+tile/2,top+95,13,FLIGHT_COLORS[seat]);
     });
 
     const by = top+113;
-    const size = Math.min(w,height-safeBottom-by-212);
+    const size = Math.min(w,height-safeBottom-by-234);
+    drawFlightBoard(cx,by,size,!done);
+    const y = by+size+10;
+    text(done ? saveStatus() : flightHint(),cx,y+14,13,colors.muted);
+    if (!done) {
+      flightControls(left,y+29,w,false);
+      text('★ 顺风 +4　 + 补给再掷　 −2 乱流',cx,y+93,12,colors.muted);
+    }
+    roundControls(done,left,done ? y+33 : y+108,w);
+  }
+
+  function flightHint(showLegend = false) {
+    if (movingFlight) return movingFlight.hint;
+    if (rollingFlight) return '骰子转动中…';
+    if (game.die !== null) return '点棋盘上的高亮飞机';
+    if (game.lastRoll === null) return showLegend ? '★ 顺风 +4　 + 补给再掷　 −2 乱流' : '偶数起飞 · 掷 6 可再掷';
+    return `${game.lastRollBy+1} 号 · ${game.notice}`;
+  }
+
+  function flightDot(x, y, radius, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x,y,radius,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  function flightDice(x, y, w, reversed) {
+    const roller = rollingFlight ? game.turn : game.lastRollBy;
+    const face = rollingFlight?.face ?? game.lastRoll;
+    const dx = x+(reversed ? w-19 : 19), dy = y+25;
+    const numberX = x+(reversed ? 19 : w-19);
+    box(x,y,w,50,face === null ? '#30425a' : '#f4f5eb');
+    if (face === null) {
+      seatText('骰点',x+w/2,dy,15,colors.muted,reversed);
+      return;
+    }
+    box(x,y,w,3,FLIGHT_COLORS[roller]);
+    box(dx-14,dy-14,28,28,'#14253b');
+    const pip = (u,v) => flightDot(dx+u,dy+v,2,FLIGHT_COLORS[roller]);
+    if (face%2) pip(0,0);
+    if (face >= 2) { pip(-7,-7); pip(7,7); }
+    if (face >= 4) { pip(-7,7); pip(7,-7); }
+    if (face === 6) { pip(-7,0); pip(7,0); }
+    seatText(rollingFlight ? '…' : String(face),numberX,dy,29,'#14253b',reversed);
+  }
+
+  function flightControls(left, y, w, reversed, seat = game.turn) {
+    const color = FLIGHT_COLORS[game.turn];
+    const diceWidth = 74;
+    const gap = 6;
+    flightDice(reversed ? left+w-diceWidth : left,y,diceWidth,reversed);
+    if (!reversed) left += diceWidth+gap;
+    w -= diceWidth+gap;
+    if (seat !== game.turn) {
+      const arrived = game.planes[seat].filter(progress => progress === Flight.FINISH).length;
+      seatText(`你已送达 ${arrived}/2 架`,left+w/2,y+25,15,colors.muted,reversed);
+      return;
+    }
+    if (movingFlight) {
+      box(left,y,w,50,colors.panel);
+      seatText('正在移动飞机',left+w/2,y+25,15,color,reversed);
+      return;
+    }
+    if (game.die === null) {
+      box(left,y,w,50,rollingFlight ? colors.panel : color);
+      seatText(rollingFlight ? '掷骰中…' : '掷骰子',left+w/2,y+25,17,
+        rollingFlight ? colors.muted : '#14253b',reversed);
+      if (!rollingFlight) buttons.push({x:left,y,w,h:50,action:rollFlight});
+      return;
+    }
+    const half = w/2;
+    box(left+w/2,y+9,1,32,'#344962');
+    ['A','B'].forEach((label,plane) => {
+      const column = reversed ? 1-plane : plane;
+      const x = left+column*half;
+      const option = Flight.moveOption(game,plane);
+      const legal = !option.reason;
+      const headingY = reversed ? y+35 : y+15;
+      const detailY = reversed ? y+15 : y+35;
+      seatText(`飞机 ${label}`,x+half/2,headingY,14,
+        legal ? colors.ink : colors.muted,reversed);
+      const detail = option.reason || (option.extraRoll ? '补给 · 再掷' : option.action);
+      const suffix = option.capture ? ' · 撞机' : '';
+      seatText(detail+suffix,x+half/2,detailY,11,legal ? color : colors.muted,reversed);
+    });
+  }
+
+  function drawFlightBoard(cx, by, size, playable, facingBoard = false) {
     const bx = cx-size/2;
     const cell = size/Flight.GRID_SIZE;
-    const square = ([col,row], color, label = '', ink = colors.ink) => {
-      box(bx+col*cell+1,by+row*cell+1,cell-2,cell-2,color);
-      if (label) text(label,bx+(col+0.5)*cell,by+(row+0.5)*cell,cell*0.45,ink);
+    const orient = point => Flight.rotate(...point,facingBoard ? 2 : 0);
+    const center = ([col,row]) => [bx+(col+0.5)*cell,by+(row+0.5)*cell];
+    const spot = point => center(orient(point));
+    const tile = (point, color, label = '', ink = colors.ink) => {
+      const [x,y] = spot(point);
+      box(x-cell/2+1,y-cell/2+1,cell-2,cell-2,color);
+      if (label) text(label,x,y,cell*0.35,ink);
     };
-    for (let i=0; i<Flight.LAP; i++) square(Flight.trackPoint(i),colors.panel);
-    ['→','↓','←','↑'].forEach((arrow,quarter) => {
-      square(Flight.trackPoint(quarter*6),colors.panel,arrow,colors.muted);
-    });
-    square([3,3],'#395a69','终');
-    game.quarters.forEach((quarter,seat) => {
-      const color = SEAT_COLORS[seat];
-      square(Flight.planePoint(quarter,0,0),color,`${seat+1}`,colors.bg);
-      for (let progress=Flight.LAP; progress<Flight.FINISH; progress++) {
-        square(Flight.planePoint(quarter,0,progress),'#395a69',`${seat+1}`);
+
+    box(bx-4,by-4,size+8,size+8,'#324660');
+    box(bx,by,size,size,'#0d1c30');
+    const segment = Flight.LAP/4;
+    const arrows = ['→','↓','←','↑'];
+    for (let i=0; i<Flight.LAP; i++) {
+      const point = Flight.trackPoint(i);
+      const next = Flight.trackPoint((i+1)%Flight.LAP);
+      const dx = next[0]-point[0], dy = next[1]-point[1];
+      const direction = dx === 1 ? 0 : dy === 1 ? 1 : dx === -1 ? 2 : 3;
+      const arrow = arrows[(direction+(facingBoard ? 2 : 0))%4];
+      const special = FLIGHT_TILES[Flight.trackEffect(i)];
+      tile(point,special?.fill ?? (i%2 ? '#3c536a' : '#354960'),
+        special?.symbol ?? (i%segment === 5 ? arrow : ''),special?.ink ?? '#ced9e8');
+      if (!special && i%segment !== 5) flightDot(...spot(point),cell*0.045,'#899bb3');
+    }
+
+    for (let quarter=0; quarter<4; quarter++) {
+      const seat = game.quarters.indexOf(quarter);
+      const enabled = seat !== -1;
+      const active = enabled && seat === game.turn && game.winner === null;
+      const color = enabled ? FLIGHT_COLORS[seat] : '#64748c';
+      const reversed = facingBoard && seat === 1;
+      const sign = reversed ? -1 : 1;
+      const [x,y] = spot(Flight.rotate(1,1,quarter));
+      if (enabled) {
+        const half = cell*1.05;
+        box(x-half,y-cell*0.60,half*2,cell*1.20,active ? color : '#344962');
+        box(x-half+2,y-cell*0.60+2,half*2-4,cell*1.20-4,'#192e44');
+        seatText(`${seat+1} 号机库`,x,y-sign*cell*0.88,cell*0.38,color,reversed);
+        const arrived = game.planes[seat].filter(progress => progress === Flight.FINISH).length;
+        for (let i=0; i<2; i++) flightDot(x+(i-0.5)*cell*0.32,y+sign*cell*0.83,cell*0.07,
+          i < arrived ? color : '#60728b');
+        for (let plane=0; plane<2; plane++) {
+          const [px,py] = spot(Flight.planePoint(quarter,plane,Flight.HANGAR));
+          flightDot(px,py,cell*0.37,'#324a62');
+        }
+        tile(Flight.planePoint(quarter,0,0),color,'起','#14253b');
       }
-      for (let plane=0; plane<2; plane++) square(Flight.planePoint(quarter,plane,Flight.HANGAR),colors.panel);
-    });
-    game.planes.forEach((pair,seat) => {
-      pair.forEach((progress,plane) => {
-        if (progress === Flight.FINISH) return;
-        const [col,row] = Flight.planePoint(game.quarters[seat],plane,progress);
-        const x = bx+col*cell, y = by+row*cell;
-        const selectable = seat === game.turn && Flight.canMove(game,plane);
-        box(x+cell*0.12,y+cell*0.12,cell*0.76,cell*0.76,selectable ? colors.ink : SEAT_COLORS[seat]);
-        text(`${seat+1}${plane === 0 ? 'A' : 'B'}`,x+cell/2,y+cell/2,cell*0.37,colors.bg);
-        if (selectable) buttons.push({x,y,w:cell,h:cell,action:() => playFlight(Flight.move(game,plane))});
-      });
+      for (let progress=Flight.LAP; progress<Flight.FINISH; progress++) {
+        const point = Flight.planePoint(quarter,0,progress);
+        tile(point,enabled ? '#24394f' : '#1c2d41',enabled ? arrows[(quarter+1+(facingBoard ? 2 : 0))%4] : '',color);
+      }
+    }
+    tile(Flight.planePoint(0,0,Flight.FINISH),'#d3e9ed','终点','#14253b');
+    game.quarters.forEach((quarter,seat) => {
+      tile(Flight.planePoint(quarter,0,Flight.WIND),'#293e56','★',FLIGHT_COLORS[seat]);
     });
 
-    const y = by+size+10;
-    const hint = game.die !== null ? `掷出 ${game.die} · 选择飞机` :
-      game.lastRoll === null ? '掷到 6 可起飞，终点需要刚好到达' :
-      `骰子 ${game.lastRoll}${game.notice ? ' · '+game.notice : ''}`;
-    text(done ? saveStatus() : hint,cx,y+14,13,colors.muted);
-    if (!done && game.die === null) {
-      button('掷骰子',left,y+29,w,44,() => playFlight(Flight.roll(game,1+Math.floor(Math.random()*6))),'#395a69');
-    } else if (!done) {
-      const half = (w-10)/2;
-      ['A','B'].forEach((label,plane) => {
-        const x = left+plane*(half+10);
-        if (Flight.canMove(game,plane)) {
-          button(`移动飞机 ${label}`,x,y+29,half,44,() => playFlight(Flight.move(game,plane)),'#395a69');
-        } else {
-          box(x,y+29,half,44,colors.panel);
-          text(`飞机 ${label} 不可走`,x+half/2,y+51,14,colors.muted);
+    const landings = new Map();
+    const choices = playable && !movingFlight && game.die !== null ? [Flight.moveOption(game,0),Flight.moveOption(game,1)] : [];
+    choices.forEach((option,plane) => {
+      if (option.reason) return;
+      const quarter = game.quarters[game.turn];
+      const point = Flight.planePoint(quarter,plane,option.next);
+      const key = point.join(',');
+      const label = plane === 0 ? 'A' : 'B';
+      const marker = landings.get(key);
+      landings.set(key,{ point, label: marker ? `${marker.label}/${label}` : label });
+      if (option.via !== undefined) {
+        const start = Math.min(option.via,option.next);
+        const end = Math.max(option.via,option.next);
+        for (let step=start+1; step<end; step++) {
+          flightDot(...spot(Flight.planePoint(quarter,plane,step)),cell*0.10,FLIGHT_COLORS[game.turn]);
         }
-      });
+      }
+    });
+    for (const { point } of landings.values()) {
+      const [x,y] = spot(point);
+      const border = cell*0.46;
+      ctx.strokeStyle = '#d8eda2';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x-border,y-border,border*2,border*2);
     }
-    roundControls(done,left,done ? y+33 : y+84,w);
+
+    const animatedPieces = movingFlight?.pieces ?? [];
+    function drawPlane(seat,plane,point,animated = false) {
+      const [x,y] = spot(point);
+      const selectable = seat === game.turn && choices[plane] && !choices[plane].reason;
+      const recent = seat === game.lastMove?.seat && plane === game.lastMove?.plane;
+      if (selectable || animated || recent) flightDot(x,y,cell*0.47,selectable || animated ? '#fff9e9' : '#8fa9c8');
+      flightDot(x,y,cell*0.40,'#111f34');
+      flightDot(x,y-cell*0.025,cell*0.35,FLIGHT_COLORS[seat]);
+      const reversed = facingBoard && seat === 1;
+      const sign = reversed ? -1 : 1;
+      seatText('✈︎',x,y-sign*cell*0.11,cell*0.33,'#14253b',reversed);
+      seatText(`${seat+1}${plane === 0 ? 'A' : 'B'}`,x,y+sign*cell*0.14,cell*0.25,'#14253b',reversed);
+      if (selectable) buttons.push({x:x-cell/2,y:y-cell/2,w:cell,h:cell,action:() => moveFlight(plane)});
+    }
+    game.planes.forEach((pair,seat) => {
+      pair.forEach((progress,plane) => {
+        if (progress === Flight.FINISH || animatedPieces.some(piece => piece.seat === seat && piece.plane === plane)) return;
+        drawPlane(seat,plane,Flight.planePoint(game.quarters[seat],plane,progress));
+      });
+    });
+    animatedPieces.forEach(({seat,plane,point}) => drawPlane(seat,plane,point,true));
+    for (const { point, label } of landings.values()) {
+      const [x,y] = spot(point);
+      const reversed = facingBoard && game.turn === 1;
+      const markerY = y+(reversed ? -1 : 1)*cell*0.36;
+      box(x-cell*0.40,markerY-cell*0.13,cell*0.80,cell*0.26,'#f2f7bd');
+      seatText(label,x,markerY,cell*0.25,'#182817',reversed);
+    }
   }
 
   function drawGomoku(cx, top, left, w) {
-    const { SIZE } = Gomoku;
     const done = game.winner || game.draw;
     text(game.draw ? '默契平局！' : game.winner ? playerNames[game.winner]+'获胜！' :
       playerNames[game.turn]+'落子',cx,top+58,28);
@@ -261,6 +523,14 @@ function start(platform) {
 
     const by = top+110;
     const size = Math.min(w, height-safeBottom-by-165);
+    drawGomokuBoard(cx,by,size,!done);
+    const y = by+size+12;
+    text(done ? saveStatus() : '轻点空交叉点落子',cx,y+14,13,colors.muted);
+    roundControls(done,left,y+33,w);
+  }
+
+  function drawGomokuBoard(cx, by, size, playable) {
+    const { SIZE } = Gomoku;
     const bx = cx-size/2;
     const step = size/SIZE;
     const inset = step/2;
@@ -289,16 +559,12 @@ function start(platform) {
       }
     }
 
-    if (!done) {
+    if (playable) {
       buttons.push({x:bx,y:by,w:size,h:size,action:(x,y) => {
         const index = Math.floor((y-by)/step)*SIZE + Math.floor((x-bx)/step);
         commitMove(index);
       }});
     }
-
-    const y = by+size+12;
-    text(done ? saveStatus() : '轻点空交叉点落子',cx,y+14,13,colors.muted);
-    roundControls(done,left,y+33,w);
   }
   function drawTicBoard(board, cx, y, size, onMove) {
     const cell = size/3;
@@ -310,6 +576,92 @@ function start(platform) {
       if (piece) text(piece === 'X' ? '✕' : '○',x+cell/2,row+cell/2,cell*0.55,colors[piece]);
       if (onMove && !piece) buttons.push({x,y:row,w:cell,h:cell,action:() => onMove(i)});
     }
+  }
+
+  function seatText(value, x, y, size, color, reversed) {
+    if (!reversed) { text(value,x,y,size,color); return; }
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.rotate(Math.PI);
+    text(value,0,0,size,color);
+    ctx.restore();
+  }
+
+  function seatButton(label, x, y, w, h, reversed, action, color = colors.panel) {
+    box(x,y,w,h,color);
+    seatText(label,x+w/2,y+h/2,15,action ? colors.ink : colors.muted,reversed);
+    if (action) buttons.push({x,y,w,h,action});
+  }
+
+  function drawFacing(cx, top, left, w) {
+    const gomoku = activeGame === 'gomoku';
+    const memory = activeGame === 'memory';
+    const flight = activeGame === 'flight';
+    const multiplayer = memory || flight;
+    const done = game.winner !== null || game.draw;
+    const playable = !done && !seatPrompt;
+    const lower = height-safeBottom;
+    const inset = flight ? 164 : 112;
+    const boardTop = top+inset;
+    const boardBottom = lower-inset;
+    const size = Math.min(w,boardBottom-boardTop);
+    const y = (boardTop+boardBottom-size)/2;
+    if (gomoku) drawGomokuBoard(cx,y,size,playable);
+    else if (memory) drawMemoryBoard(cx,y,size,playable);
+    else if (flight) drawFlightBoard(cx,y,size,playable,true);
+    else drawTicBoard(game,cx,y,size,playable ? commitMove : null);
+
+    const actions = roundActions(done,(message,accept) => {
+      seatPrompt = { message, accept };
+      render();
+    });
+    const closePrompt = accepted => {
+      const { accept } = seatPrompt;
+      seatPrompt = null;
+      if (accepted) accept();
+      else render();
+    };
+    const names = multiplayer ? ['1 号','2 号'] : gomoku ? playerNames : { X: 'X', O: 'O' };
+    const outcome = game.draw ? '平局' : done ? `${names[game.winner]}获胜！` : '';
+    const controls = seatPrompt
+      ? [['取消',() => closePrompt(false)],['确认',() => closePrompt(true)]]
+      : [['改为并排',toggleSeating],[done ? '再来一局' : '重开',actions.restart],['回大厅',actions.leave]];
+    const gap = 8;
+    const buttonWidth = (w-gap*(controls.length-1))/controls.length;
+    const seats = multiplayer ? [1,0] : gomoku ? ['white','black'] : ['O','X'];
+    seats.forEach((seat,i) => {
+      const reversed = i === 0;
+      const controlsY = reversed ? top+3 : lower-48;
+      const titleY = reversed ? top+63 : lower-66;
+      const hintY = reversed ? top+89 : lower-92;
+      const active = !done && seat === game.turn;
+      const turnLabel = multiplayer ? `${names[seat]}玩家` : `你执 ${names[seat]}`;
+      const waiting = memory || flight ? '等对方操作' : '等对方落子';
+      const title = seatPrompt ? '请确认操作' : outcome || `${turnLabel} · ${active ? '轮到你' : waiting}`;
+      let hint = gomoku ? '横竖斜连成五子或以上获胜' : '横竖斜连成三子获胜';
+      if (memory) {
+        hint = `已配对 ${game.scores[seat]} 对 · ${game.open.length === 2 ? '未配对，即将换人' : '配对成功可继续'}`;
+      } else if (flight) {
+        hint = flightHint(true);
+      }
+      if (done) hint = memory ? `配对 ${game.scores[seat]} 对 · ${saveStatus()}` : saveStatus();
+      seatText(title,cx,titleY,21,active && !seatPrompt ? (flight ? FLIGHT_COLORS[seat] : '#ffd67d') : colors.ink,reversed);
+      seatText(seatPrompt?.message || hint,cx,hintY,13,colors.muted,reversed);
+      if (flight && !seatPrompt) {
+        const actionY = reversed ? top+106 : lower-157;
+        if (!done) flightControls(left,actionY,w,reversed,seat);
+        else {
+          const arrived = game.planes[seat].filter(progress => progress === Flight.FINISH).length;
+          seatText(`你已送达 ${arrived}/2 架`,cx,actionY+22,15,FLIGHT_COLORS[seat],reversed);
+        }
+      }
+      controls.forEach(([label,action],index) => {
+        const column = reversed ? controls.length-1-index : index;
+        const x = left+column*(buttonWidth+gap);
+        seatButton(label,x,controlsY,buttonWidth,40,reversed,action,
+          label === '确认' ? '#395a69' : colors.panel);
+      });
+    });
   }
 
   function returnFromOnline() {
@@ -404,7 +756,10 @@ function start(platform) {
   function render() {
     buttons = []; box(0,0,width,height,colors.bg);
     const cx = width/2, top = Math.max(30, platform.safeTop || 0), w = Math.min(width-40,400), left = cx-w/2;
-    text('DUO / 一起玩',cx,top+15,15,colors.O);
+    const seatingGame = scene === 'game' && (!multiplayerRecords.has(activeGame) || playerCount === 2);
+    if (seatingGame && facing) { drawFacing(cx,top,left,w); return; }
+    if (seatingGame) button('座位：并排 · 切换面对面',left,top,w,34,toggleSeating);
+    else text('DUO / 一起玩',cx,top+15,15,colors.O);
     if (scene === 'home') {
       text('双人互动小游戏大全',cx,top+76,26);
       text('一块屏幕，轮流玩，一点胜负欲。',cx,top+115,15,colors.muted);
@@ -425,6 +780,14 @@ function start(platform) {
       countButtons(left,top+150,w,playerCount,count => { playerCount = count; render(); });
       button(start,left,top+218,w,48,() => startMultiplayer(0),'#395a69');
       button('返回大厅',left,top+280,w,46,() => { scene = 'home'; render(); });
+      if (activeGame === 'flight') {
+        box(left,top+350,w,125,colors.panel);
+        text('快局玩法',cx,top+370,16,colors.ink);
+        text('偶数起飞 · 掷 6 可再掷一次',cx,top+394,14,colors.muted);
+        text('★ 同色顺风 +4 格 · + 补给再掷',cx,top+415,14,colors.muted);
+        text('−2 乱流退两格 · 最终落点可撞机',cx,top+436,14,colors.muted);
+        text('先让两架飞机刚好抵达终点',cx,top+457,14,colors.muted);
+      }
     } else if (scene === 'records') {
       text('本机战绩',cx,top+69,29);
       const tabWidth = (w-16)/GAMES.length;
@@ -443,7 +806,7 @@ function start(platform) {
         stats.wins.forEach((wins,seat) => {
           const y = top+242+seat*43;
           box(left,y,w,37,colors.panel);
-          text(`${playerLabel(seat)} · ${wins} 胜`,cx,y+18,17,SEAT_COLORS[seat]);
+          text(`${playerLabel(seat)} · ${wins} 胜`,cx,y+18,17,(recordsGame === 'flight' ? FLIGHT_COLORS : SEAT_COLORS)[seat]);
         });
       } else if (recordsGame === 'gomoku') {
         ['black','white'].forEach((player,i) => {
