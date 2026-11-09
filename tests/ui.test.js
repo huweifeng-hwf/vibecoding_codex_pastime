@@ -62,7 +62,7 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
   accept();
   tap(160, 489);
   assert.ok(labels.includes('最快获胜：3 次落子'));
-  tap(160, 155);
+  tap(125, 155);
   assert.ok(labels.includes('黑方 · 1 胜'));
   assert.ok(labels.includes('白方 · 0 胜'));
 });
