@@ -9,7 +9,7 @@ function start(platform) {
   let width, height, safeBottom = 0, scene = 'home', game, saved = true, buttons = [];
   let records = Records.load(storage);
   let gomokuRecords = Records.loadGomoku(storage);
-  let first = 'X', gomokuFirst = 'black', selected = null;
+  let first = 'X', gomokuFirst = 'black';
   let playingGomoku = false, showingGomokuRecords = false;
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
@@ -18,7 +18,6 @@ function start(platform) {
   const playerNames = { black: '黑方', white: '白方' };
   function newRound() {
     game = playingGomoku ? Gomoku.createGame(gomokuFirst) : createGame(first);
-    selected = null;
     scene = 'game';
     render();
   }
@@ -32,7 +31,6 @@ function start(platform) {
     const next = playingGomoku ? Gomoku.play(game, index) : play(game, index);
     if (next === game) return;
     game = next;
-    selected = null;
     if (game.winner || game.draw) {
       if (playingGomoku) {
         gomokuRecords = Records.recordGomoku(gomokuRecords, game);
@@ -84,7 +82,7 @@ function start(platform) {
     text('横、竖或斜向连成五子及以上获胜',cx,top+89,14,colors.muted);
 
     const by = top+110;
-    const size = Math.min(w, height-safeBottom-by-192);
+    const size = Math.min(w, height-safeBottom-by-165);
     const bx = cx-size/2;
     const step = size/SIZE;
     const inset = step/2;
@@ -100,14 +98,12 @@ function start(platform) {
       const x = bx+(i%SIZE)*step;
       const y = by+Math.floor(i/SIZE)*step;
       const stone = game.board[i];
-      if (stone || i === selected) {
-        const color = (stone || game.turn) === 'black' ? '#1f2026' : '#fff5de';
-        ctx.globalAlpha = stone ? 1 : 0.55;
+      if (stone) {
+        const color = stone === 'black' ? '#1f2026' : '#fff5de';
         ctx.beginPath();
         ctx.arc(x+inset,y+inset,step*0.41,0,Math.PI*2);
         ctx.fillStyle = color;
         ctx.fill();
-        ctx.globalAlpha = 1;
         if (game.line.includes(i) || i === game.last) {
           const mark = game.line.includes(i) ? '#ef7963' : '#589fcb';
           box(x+inset-2,y+inset-2,4,4,mark);
@@ -118,22 +114,13 @@ function start(platform) {
     if (!done) {
       buttons.push({x:bx,y:by,w:size,h:size,action:(x,y) => {
         const index = Math.floor((y-by)/step)*SIZE + Math.floor((x-bx)/step);
-        if (game.board[index] !== null) return;
-        selected = index;
-        render();
+        commitMove(index);
       }});
     }
 
     const y = by+size+12;
-    if (done) {
-      text(saveStatus(),cx,y+20,13,colors.muted);
-    } else if (selected === null) {
-      box(left,y,w,42,colors.panel);
-      text('轻点空交叉点选位',cx,y+21,15,colors.muted);
-    } else {
-      button('确认落子',left,y,w,42,() => commitMove(selected),'#395a69');
-    }
-    roundControls(done,left,y+54,w);
+    text(done ? saveStatus() : '轻点空交叉点落子',cx,y+14,13,colors.muted);
+    roundControls(done,left,y+33,w);
   }
   function render() {
     buttons = []; box(0,0,width,height,colors.bg);
