@@ -6,13 +6,31 @@ const { Arena, Pool } = require('./table-games');
 const SEAT_INK = ['#ffad98','#80dfd4','#ffd67d','#c4b5ff'];
 const POOL_INK = ['#fff8e6','#eec952','#5485ed','#eb706d','#a67bdd','#f49c51','#4eb98c','#8c4844','#141822'];
 
-function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,saveStatus,label,hit,update,animate,render}) {
-  let input = null, drag = null, pointers = new Map(), wallMode = null, wallPreview = null;
+function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,saveStatus,label,hit,update,animate,render,requestFrame}) {
+  let input = null, drag = null, motion = null, pointers = new Map(), wallMode = null, wallPreview = null;
   const muted = '#aab2cc';
   const done = game => game.winner !== null || game.draw;
   function reset() {
-    input = drag = wallMode = wallPreview = null;
+    input = drag = motion = wallMode = wallPreview = null;
     pointers.clear();
+  }
+  function tween(duration,details,finish) {
+    const current = motion = {...details,progress:0};
+    let start;
+    const frame = time => {
+      if (motion !== current) return;
+      start ??= time;
+      current.progress = Math.min(1,(time-start)/duration);
+      if (current.progress < 1) {
+        render();
+        requestFrame(frame);
+      } else {
+        motion = null;
+        finish();
+      }
+    };
+    render();
+    requestFrame(frame);
   }
   function circle(x,y,r,fill) {
     ctx.beginPath();
@@ -60,10 +78,18 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
       if (game.line.includes(index)) circle(x,cy,cell*0.46,'#fff9e9');
       circle(x,cy,cell*0.37,seat === null ? '#152740' : SEAT_INK[seat]);
     }
-    for(let col=0;!done(game)&&col<Connect.COLUMNS;col++) {
+    if (motion) {
+      const {col,row,progress} = motion;
+      circle(bx+(col+0.5)*cell,y+(-0.45+(row+0.95)*progress**2)*cell,cell*0.37,SEAT_INK[game.turn]);
+    }
+    for(let col=0;!motion&&!done(game)&&col<Connect.COLUMNS;col++) {
       if (game.board[col] !== null) continue;
       text('▾',bx+(col+0.5)*cell,y-15,17,SEAT_INK[game.turn]);
-      cellButton(bx+col*cell,y-26,cell,cell*Connect.ROWS+26,()=>update(Connect.drop(game,col)));
+      cellButton(bx+col*cell,y-26,cell,cell*Connect.ROWS+26,()=>{
+        const next = Connect.drop(game,col);
+        const row = Math.floor(next.board.findIndex((seat,i)=>seat!==game.board[i])/Connect.COLUMNS);
+        tween(145+row*20,{col,row},()=>update(next));
+      });
     }
     footer(game,cx,left,w,y+cell*Connect.ROWS+15,'点击一列落子，横、竖或斜着连成四枚');
   }
@@ -71,14 +97,14 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
     heading(game,cx,top);
     const by=top+109, size=Math.min(w,bottom-by-222), cell=size/Race.SIZE, bx=cx-size/2;
     text(`1 号余墙 ${game.left[0]}  ·  2 号余墙 ${game.left[1]}`,cx,top+84,14,muted);
-    const legal=wallMode ? [] : Race.destinations(game);
+    const legal=wallMode || motion ? [] : Race.destinations(game);
     for(let i=0;i<Race.SIZE*Race.SIZE;i++) {
       const x=bx+i%Race.SIZE*cell, y=by+Math.floor(i/Race.SIZE)*cell;
       const row=Math.floor(i/Race.SIZE);
       box(x+1,y+1,cell-2,cell-2,row===0?'#583f4a':row===8?'#2c5859':'#263a57');
       if (legal.includes(i)) {
         circle(x+cell/2,y+cell/2,cell*0.16,SEAT_INK[game.turn]);
-        cellButton(x,y,cell,cell,()=>update(Race.move(game,i)));
+        cellButton(x,y,cell,cell,()=>tween(150,{target:i},()=>update(Race.move(game,i))));
       }
     }
     function paintWall(wall,color) {
@@ -88,15 +114,26 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
     }
     game.walls.forEach(wall=>paintWall(wall,'#f6d783'));
     if (wallMode && !done(game)) {
+      const preview=(x,y)=>{
+        if (wallPreview?.x===x && wallPreview.y===y) return;
+        wallPreview={x,y,axis:wallMode};
+        render();
+      };
+      input={kind:'wall',x:bx+cell/2,y:by+cell/2,w:size-cell,h:size-cell,cell,preview};
       for (let y=0;y<Race.SIZE-1;y++) for(let x=0;x<Race.SIZE-1;x++) {
         const px=bx+(x+1)*cell, py=by+(y+1)*cell;
         circle(px,py,cell*0.07,'#f6d783');
-        cellButton(px-cell/2,py-cell/2,cell,cell,()=>{wallPreview={x,y,axis:wallMode};render();});
+        cellButton(px-cell/2,py-cell/2,cell,cell,()=>preview(x,y));
       }
       if (wallPreview) paintWall(wallPreview,Race.wallError(game,wallPreview)?'#ff8383':'#fff3af');
     }
     game.pawns.forEach((pawn,seat)=>{
-      const x=bx+(pawn%Race.SIZE+0.5)*cell, y=by+(Math.floor(pawn/Race.SIZE)+0.5)*cell;
+      let x=bx+(pawn%Race.SIZE+0.5)*cell, y=by+(Math.floor(pawn/Race.SIZE)+0.5)*cell;
+      if (motion && seat===game.turn) {
+        const p=1-(1-motion.progress)**2;
+        x+=(motion.target%Race.SIZE-pawn%Race.SIZE)*cell*p;
+        y+=(Math.floor(motion.target/Race.SIZE)-Math.floor(pawn/Race.SIZE))*cell*p;
+      }
       circle(x,y,cell*0.33,SEAT_INK[seat]);
       text(String(seat+1),x,y,cell*0.42,'#152740');
     });
@@ -105,46 +142,65 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
     const modes=[[null,'走棋'],['h','横墙'],['v','竖墙']], width=(w-12)/3;
     modes.forEach(([mode,title],i)=>{
       button(title,left+i*(width+6),y,width,39,()=>{
-        wallMode=mode; wallPreview=null; render();
+        if (motion) return;
+        drag=null;
+        wallPreview=mode && wallPreview ? {...wallPreview,axis:mode} : null;
+        wallMode=mode;
+        render();
       },mode===wallMode?'#395a69':'#202640',14);
     });
     const error=wallPreview ? Race.wallError(game,wallPreview) : '';
     if (wallPreview && !error) button('确认筑墙',left,y+46,w,38,()=>{
       const next=Race.place(game,wallPreview);
-      wallMode=wallPreview=null;
+      drag=wallMode=wallPreview=null;
       update(next);
     },'#395a69',15);
-    else text(error || (wallMode?'点交叉处预览墙的位置':'点高亮格走棋，先到对边获胜'),cx,y+64,13,muted);
+    else text(error || (wallMode?'点或拖动交叉处预览墙':'点高亮格走棋，先到对边获胜'),cx,y+64,13,muted);
     roundControls(false,left,y+95,w);
   }
   function dieFace(value,x,y,size) {
     box(x-size/2,y-size/2,size,size,'#f5ead6');
-    text(String(value),x,y,size*0.60,'#172139');
+    const pip=(dx,dy)=>circle(x+dx*size*0.23,y+dy*size*0.23,size*0.075,'#172139');
+    if (value%2) pip(0,0);
+    if (value>=2) { pip(-1,-1); pip(1,1); }
+    if (value>=4) { pip(1,-1); pip(-1,1); }
+    if (value===6) { pip(-1,0); pip(1,0); }
   }
   function drawBox(game,{cx,top,left,w}) {
     heading(game,cx,top);
     scores(game,left,w,top+83,value=>value+' 分');
     const round=Math.min(2,Math.floor(game.turns/game.scores.length)+1);
     text(`第 ${round}/2 轮 · 总分较低者获胜`,cx,top+150,14,muted);
-    if (game.lastDice) game.lastDice.forEach((die,i)=>dieFace(die,cx+(i-0.5)*66,top+199,54));
+    const shownDice=motion ? [0,1].map(i=>1+(Math.floor(motion.progress*13)+i*3)%6) : game.lastDice;
+    if (shownDice) {
+      shownDice.forEach((die,i)=>dieFace(die,cx+(i-0.5)*66,top+197,49));
+      if (!motion) {
+        text('合计',cx+91,top+186,12,muted);
+        text(String(shownDice[0]+shownDice[1]),cx+91,top+207,21,SEAT_INK[game.turn]);
+      }
+    }
     else text('两颗骰子的和决定要盖的数字',cx,top+199,15,muted);
     const tile=Math.min(63,(w-18)/3), bx=cx-(tile*3+12)/2, by=top+242;
+    const choices=Box.choices(game);
     for(let i=0;i<9;i++) {
       const open=game.open&(1<<i), picked=game.picked&(1<<i);
       const x=bx+i%3*(tile+6), y=by+Math.floor(i/3)*48;
-      box(x,y,tile,42,picked?'#487479':open?'#2d415f':'#182135');
-      text(String(i+1),x+tile/2,y+21,21,open?'#f5f1e9':'#67748d');
-      if (open && game.dice) cellButton(x,y,tile,42,()=>update(Box.pick(game,i)));
+      const available=choices&(1<<i);
+      box(x,y,tile,42,picked?'#487479':available?'#365879':open?'#29354c':'#182135');
+      text(String(i+1),x+tile/2,y+21,21,picked||available||(!game.dice&&open)?'#f5f1e9':'#8491a9');
+      if (available||picked) cellButton(x,y,tile,42,()=>update(Box.pick(game,i)));
     }
     const target=game.dice ? game.dice[0]+game.dice[1] : 0;
     const picked=Box.total(game.picked);
     if (done(game)) { footer(game,cx,left,w,top+403,''); return; }
-    text(game.dice?`已选 ${picked} / 需要 ${target}`:game.notice || '每轮不能盖牌时，记录剩余数字之和',cx,top+396,14,muted);
-    if (!game.dice) button('掷骰',left,top+416,w,40,()=>{
-      update(Box.roll(game,Array.from({length:2},()=>1+Math.floor(Math.random()*6))));
+    if (!motion) text(game.dice?`已选 ${picked} / 需要 ${target}`:game.notice || '每轮不能盖牌时，记录剩余数字之和',cx,top+396,14,muted);
+    if (motion) text('骰子滚动中',cx,top+437,14,muted);
+    else if (!game.dice) button('掷骰',left,top+416,w,40,()=>{
+      const dice=Array.from({length:2},()=>1+Math.floor(Math.random()*6));
+      tween(255,{},()=>update(Box.roll(game,dice)));
     },'#395a69');
     else if(picked===target) button('确认盖牌',left,top+416,w,40,()=>update(Box.close(game)),'#395a69');
-    else text('点数字牌凑到骰点总和',cx,top+437,14,muted);
+    else text('点亮牌凑骰点，再点一次可取消',cx,top+437,14,muted);
     roundControls(false,left,top+470,w);
   }
 
@@ -159,8 +215,8 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
   function drawDarts(game,{cx,top,left,w,bottom}) {
     heading(game,cx,top);
     scores(game,left,w,top+81,value=>value+' 分');
-    const r=Math.min(w*0.43,(bottom-top-354)/2);
-    const cy=top+151+r, turn=Math.min(3,Math.floor(game.turns/(game.scores.length*3))+1);
+    const r=Math.min(w*0.43,(bottom-top-376)/2);
+    const cy=top+173+r, turn=Math.min(3,Math.floor(game.turns/(game.scores.length*3))+1);
     text(`第 ${turn}/3 轮 · 每人三镖`,cx,top+139,13,muted);
     const span=Math.PI/10;
     Darts.SECTORS.forEach((score,i)=>{
@@ -181,21 +237,27 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
     const landing = pointer => ({
       x:(pointer.x-pointer.startX)/r*1.45, y:1.15+(pointer.y-pointer.startY)/r*1.8,
     });
-    if (drag) {
-      const target=landing(drag);
-      if (Math.hypot(target.x,target.y)<=1.13) {
-        const x=cx+target.x*r, dy=cy+target.y*r;
-        line(x-7,dy,x+7,dy,'#fff7bf',2);
-        line(x,dy-7,x,dy+7,'#fff7bf',2);
+    const target=drag ? landing(drag) : motion?.target;
+    const points=target ? Darts.score(target.x,target.y) : null;
+    if (target) {
+      const edge=Math.max(1,Math.hypot(target.x,target.y)/1.02);
+      const x=cx+target.x*r/edge, dy=cy+target.y*r/edge;
+      const ink=points ? '#fff7bf' : '#ff9b94';
+      line(x-8,dy,x+8,dy,ink,2);
+      line(x,dy-8,x,dy+8,ink,2);
+      if (motion) {
+        const p=motion.progress, tail=Math.max(0,p-0.2);
+        line(cx+(x-cx)*tail,y+(dy-y)*tail,cx+(x-cx)*p,y+(dy-y)*p,ink,3);
       }
     }
     box(left,y,w,52,'#304b66');
-    text('从这里向上划出飞镖',cx,y+17,16);
-    text(game.lastPoints===null?'松手投掷 · 斜划改变方向':`上一镖 ${game.lastPoints} 分 · 本轮第 ${game.turns%3+1} 镖`,cx,y+37,12,muted);
-    input={kind:'darts', x:left,y,w,h:52, release(pointer) {
+    text(target ? (points ? `瞄准 ${points} 分` : '瞄准：脱靶') : '按住向上拖动，松手投掷',cx,y+17,16);
+    text(drag ? '左右微调方向，上下调整远近' :
+      game.lastPoints===null ? '准星会显示预计落点' : `上一镖 ${game.lastPoints} 分 · 本轮第 ${game.turns%3+1} 镖`,cx,y+37,12,muted);
+    if (!motion) input={kind:'darts', x:left,y,w,h:52, release(pointer) {
       if (pointer.startY-pointer.y<9) return;
-      const target=landing(pointer);
-      update(Darts.throw(game,target.x,target.y));
+      const aim=landing(pointer);
+      tween(165,{target:aim},()=>update(Darts.throw(game,aim.x,aim.y)));
     }};
     roundControls(false,left,y+62,w);
   }
@@ -221,7 +283,24 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
         circle(px,py,MALLET*scale*0.52,pitch);
       } else box(px-PADDLE*scale,py-0.013*scale,PADDLE*2*scale,0.026*scale,SEAT_INK[seat]);
     });
-    circle(x+game.ball.x*scale,y+game.ball.y*scale,BALL*scale,'#fff7dd');
+    const {ball,impact}=game;
+    const ballX=x+ball.x*scale, ballY=y+ball.y*scale;
+    if (game.phase==='playing') {
+      const tailX=Math.max(0,Math.min(W,ball.x-ball.vx*0.045));
+      const tailY=Math.max(0,Math.min(H,ball.y-ball.vy*0.045));
+      line(x+tailX*scale,y+tailY*scale,ballX,ballY,hockey?'#6f9cae':'#777da8',BALL*scale);
+    }
+    if (impact) {
+      ctx.save();
+      ctx.globalAlpha=impact.life/0.18;
+      ctx.beginPath();
+      ctx.arc(x+impact.x*scale,y+impact.y*scale,scale*(0.03+0.04*(1-impact.life/0.18)),0,Math.PI*2);
+      ctx.lineWidth=2;
+      ctx.strokeStyle='#fff7dd';
+      ctx.stroke();
+      ctx.restore();
+    }
+    circle(ballX,ballY,BALL*scale,'#fff7dd');
     let serveButton;
     if (game.phase==='ready') {
       const topSeat=game.turn===1;
@@ -255,16 +334,22 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
     box(x,y,scale,H*scale,'#226759');
     POCKETS.forEach(p=>circle(x+p.x*scale,y+p.y*scale,scale*0.051,'#142134'));
     const cue=game.balls.find(ball=>ball.id===0);
+    let strength=null;
     if (drag && cue && game.phase==='ready') {
       const dx=drag.startX-drag.x, dy=drag.startY-drag.y, length=Math.hypot(dx,dy);
+      strength=Pool.power(length/scale);
       if (length>1) {
-        const bx=x+cue.x*scale, by=y+cue.y*scale, d=Math.min(scale*0.46,length*1.4);
-        ctx.save();
+        const bx=x+cue.x*scale, by=y+cue.y*scale;
+        const target=Pool.guide(game,cue,dx/length,dy/length);
+        const tx=x+target.x*scale, ty=y+target.y*scale;
+        for (let i=8,span=Math.hypot(tx-bx,ty-by);i<span;i+=8) {
+          circle(bx+(tx-bx)*i/span,by+(ty-by)*i/span,1.5,'#eaf6d6');
+        }
         ctx.beginPath();
-        ctx.rect(x,y,scale,H*scale);
-        ctx.clip();
-        line(bx,by,bx+dx/length*d,by+dy/length*d,'#eaf6d6',2);
-        ctx.restore();
+        ctx.arc(tx,ty,R*scale,0,Math.PI*2);
+        ctx.lineWidth=1.5;
+        ctx.strokeStyle='#eaf6d6';
+        ctx.stroke();
       }
     }
     game.balls.forEach(b=>{
@@ -280,9 +365,22 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
     }};
     if(game.phase==='inHand') cellButton(x,y,scale,H*scale,(px,py)=>{
       if(Pool.place(game,(px-x)/scale,(py-y)/scale)) render();
+      else {
+        game.notice='请点离球袋和其他球更远的空位';
+        render();
+      }
     });
-    const hint=game.phase==='inHand'?'犯规 · 点空处摆母球':game.phase==='ready'?`${game.notice} · 向后拖动蓄力`:game.notice;
-    footer(game,cx,left,w,y+H*scale+13,hint);
+    const foot=y+H*scale+13;
+    if (strength!==null) {
+      const gauge=w*0.42;
+      text(strength ? `力度 ${Math.round(strength*100)}%` : '继续拖动',cx-gauge/2-4,foot+13,13);
+      box(cx+8,foot+10,gauge,6,'#304458');
+      if (strength) box(cx+8,foot+10,gauge*strength,6,'#ffcf80');
+      roundControls(false,left,foot+34,w);
+    } else {
+      const hint=game.phase==='ready'?`${game.notice} · 反向拖动击球`:game.notice;
+      footer(game,cx,left,w,foot,hint);
+    }
   }
 
   const drawers={connect:drawConnect,race:drawRace,box:drawBox,darts:drawDarts,pong:drawArena,hockey:drawArena,pool:drawPool};
@@ -290,6 +388,13 @@ function createExtraUI({ctx,text,box,button,seatText,seatButton,roundControls,sa
   function pointer(type,id,x,y) {
     if (!input) return;
     const inside=contains(input,x,y);
+    if (input.kind==='wall') {
+      if (type==='down' && inside && !drag) drag={id};
+      if (drag?.id!==id) return;
+      if (type==='up'||type==='cancel') drag=null;
+      else if (inside) input.preview(Math.floor((x-input.x)/input.cell),Math.floor((y-input.y)/input.cell));
+      return;
+    }
     if(input.kind==='arena') {
       if (type==='down' && input.serveButton && contains(input.serveButton,x,y)) {
         input.serveButton.action();

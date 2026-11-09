@@ -9,11 +9,13 @@ const body = (x,y) => ({x,y,vx:0,vy:0});
 
 function resetVolley(game) {
   game.ball = body(0.5,H/2);
-  game.paddles = [0,1].map(seat => ({
+  game.paddles ??= [0,1].map(seat => ({
     ...body(0.5,seatY(seat)), targetX:0.5, targetY:seatY(seat),
   }));
+  game.paddles.forEach(pad => { pad.vx=pad.vy=0; });
   game.phase = 'ready';
   game.flatTime = 0;
+  game.impact = null;
 }
 
 function createArena(kind,first) {
@@ -45,15 +47,16 @@ function scoreGoal(game,seat) {
 }
 function arenaTick(game,dt) {
   const hockey = game.kind === 'hockey';
-  for (const pad of game.paddles) {
+  if (hockey) for (const pad of game.paddles) {
     const dx = pad.targetX-pad.x, dy = pad.targetY-pad.y;
-    const fraction = Math.min(1,3.6*dt/(Math.hypot(dx,dy)||1));
+    const fraction = Math.min(1,6.4*dt/(Math.hypot(dx,dy)||1));
     pad.vx = dx*fraction/dt;
     pad.vy = dy*fraction/dt;
     pad.x += dx*fraction;
     pad.y += dy*fraction;
   }
   if (game.phase !== 'playing') return;
+  if (game.impact && (game.impact.life-=dt)<=0) game.impact=null;
   const ball = game.ball, oldY = ball.y;
   ball.x += ball.vx*dt;
   ball.y += ball.vy*dt;
@@ -71,6 +74,7 @@ function arenaTick(game,dt) {
       ball.y = edge;
       ball.vx = Math.sin(angle)*speed;
       ball.vy = -sign*Math.cos(angle)*speed;
+      game.impact={x:ball.x,y:ball.y,life:0.18};
     }
   } else {
     for (const pad of game.paddles) {
@@ -84,6 +88,7 @@ function arenaTick(game,dt) {
       if (approach > 0) {
         ball.vx += nx*approach*1.72;
         ball.vy += ny*approach*1.72;
+        game.impact={x:ball.x,y:ball.y,life:0.18};
       }
     }
     if (Math.abs(ball.x-0.5) > GOAL-BALL && (ball.y < BALL || ball.y > H-BALL)) {
@@ -110,7 +115,7 @@ function substeps(tick,seconds) {
   for (let i=0;i<count;i++) tick(seconds/count);
 }
 const Arena = {
-  W,H,BALL,MALLET,PADDLE,GOAL,aim,serve:startVolley,
+  W,H,BALL,MALLET,PADDLE,GOAL,serve:startVolley,
   pong: { createGame: (_,first=0) => createArena('pong',first) },
   hockey: { createGame: (_,first=0) => createArena('hockey',first) },
   step(game,seconds) {
@@ -118,7 +123,7 @@ const Arena = {
   },
   readyAim(game,seat,x,y) {
     aim(game,seat,x,y);
-    if (game.phase === 'ready') {
+    if (game.phase === 'ready' || game.kind === 'pong') {
       const pad=game.paddles[seat];
       pad.x=pad.targetX;
       pad.y=pad.targetY;
@@ -147,6 +152,22 @@ function legalCue(game,x,y) {
   return x >= R && x <= W-R && y >= R && y <= H-R &&
     !POCKETS.some(p=>Math.hypot(x-p.x,y-p.y)<0.08) &&
     !game.balls.some(b=>b.id!==0 && Math.hypot(x-b.x,y-b.y)<2*R+0.002);
+}
+const power = pull => clamp((pull-0.03)/0.33,0,1);
+function guide(game,cue,dx,dy) {
+  let distance=Math.min(
+    dx>0 ? (W-R-cue.x)/dx : dx<0 ? (R-cue.x)/dx : Infinity,
+    dy>0 ? (H-R-cue.y)/dy : dy<0 ? (R-cue.y)/dy : Infinity,
+  );
+  for (const ball of game.balls) {
+    if (ball===cue) continue;
+    const x=ball.x-cue.x, y=ball.y-cue.y;
+    const along=x*dx+y*dy, side=x*dy-y*dx;
+    if (along<=0 || Math.abs(side)>=2*R) continue;
+    const contact=Math.max(0,along-Math.sqrt(4*R*R-side*side));
+    distance=Math.min(distance,contact);
+  }
+  return {x:cue.x+dx*distance,y:cue.y+dy*distance};
 }
 function setCue(game,x,y) {
   const cue = game.balls.find(b=>b.id===0);
@@ -226,7 +247,7 @@ function poolTick(game,dt) {
   }
 }
 const Pool = {
-  W,H,R,POCKETS,group,
+  W,H,R,POCKETS,group,power,guide,
   createGame: (_,first=0) => ({
     first,turn:first,winner:null,phase:'ready',groups:[null,null],balls:rack(),moves:0,notice:'开球 · 球组未分配',
   }),
@@ -240,7 +261,8 @@ const Pool = {
   shoot(game,dx,dy) {
     const pull=Math.hypot(dx,dy), cue=game.balls.find(b=>b.id===0);
     if (game.phase!=='ready' || !cue || !Number.isFinite(pull) || pull<0.03) return false;
-    const velocity=Math.min(2.65,pull*8.5);
+    const strength=power(pull);
+    const velocity=0.24+2.41*(0.48*strength+0.52*strength**2);
     cue.vx=dx/pull*velocity;
     cue.vy=dy/pull*velocity;
     const own=game.groups[game.turn];

@@ -37,6 +37,7 @@ test('挡路竞速支持越子和受阻后斜跳，封死路线和交叉墙不�
 
 test('掷骰封盒验证数字和，无解自动结分，各玩家轮次相同', () => {
   let game = Box.roll(Box.createGame(3,2),[1,1]);
+  assert.equal(Box.choices(game),1<<1);
   assert.equal(Box.close(game),game);
   game = Box.close(Box.pick(game,1));
   assert.equal(Box.total(game.open),43);
@@ -48,6 +49,12 @@ test('掷骰封盒验证数字和，无解自动结分，各玩家轮次相同',
   assert.equal(game.turns,6);
   assert.deepEqual(game.scores,[2,2,44]);
   assert.equal(game.draw,true);
+
+  const combo=Box.roll(Box.createGame(2),[2,3]);
+  const picked=Box.pick(combo,0);
+  assert.ok(Box.choices(picked)&(1<<3));
+  assert.equal(Box.choices(picked)&(1<<1),0);
+  assert.equal(Box.choices(Box.pick(picked,3)),0);
 });
 
 test('飞镖计单双三倍、内外靶心和脱靶，四人打完三轮才结算', () => {
@@ -67,6 +74,9 @@ test('Pong 挡板反弹并计分，空气曲棍球球门外反弹且圆拍不能
   Object.assign(pong.ball,{x:0.5,y:0.2,vx:0,vy:-1});
   Arena.step(pong,0.10);
   assert.ok(pong.ball.vy>0);
+  assert.ok(pong.impact?.life>0);
+  Arena.readyAim(pong,0,0.72,Arena.H);
+  assert.equal(pong.paddles[0].x,0.72);
   pong.scores[0]=6;
   Object.assign(pong.ball,{x:0.02,y:0.07,vx:0,vy:-1});
   Arena.step(pong,0.13);
@@ -90,6 +100,13 @@ test('Pong 挡板反弹并计分，空气曲棍球球门外反弹且圆拍不能
 test('八球台球开球会碰撞球堆，母球落袋后对方自由摆球，黑八判胜负', () => {
   const pool=Pool.createGame(2,0);
   assert.equal(pool.balls.length,16);
+  const cue=pool.balls[0];
+  const contact=Pool.guide(pool,cue,0,-1);
+  assert.equal(contact.x,cue.x);
+  assert.equal(contact.y,pool.balls[1].y+2*Pool.R);
+  assert.equal(Pool.power(0.03),0);
+  assert.ok(Pool.power(0.1)<Pool.power(0.25));
+  assert.equal(Pool.power(0.5),1);
   assert.ok(Pool.shoot(pool,0,-0.4));
   Pool.step(pool,1);
   assert.equal(pool.shot.firstHit,1);

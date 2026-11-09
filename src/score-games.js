@@ -13,6 +13,7 @@ const TILES = 0x1ff;
 const bits = Array.from({length:9},(_,i) => 1<<i);
 const total = mask => bits.reduce((sum,bit,i) => sum+((mask&bit) ? i+1 : 0),0);
 function canMake(mask,target) {
+  if (target <= 0) return target === 0;
   for (let part=mask;part;part=(part-1)&mask) {
     if (total(part) === target) return true;
   }
@@ -27,6 +28,13 @@ function closeBoxTurn(game,notice) {
 
 const Box = {
   total,
+  choices(game) {
+    if (!game.dice) return 0;
+    const remaining = game.dice[0]+game.dice[1]-total(game.picked);
+    const available = game.open&~game.picked;
+    return bits.reduce((choices,bit,i) => (available&bit) && canMake(available&~bit,remaining-i-1)
+      ? choices|bit : choices,0);
+  },
   createGame: (count,first = 0) => ({
     first, turn:first, turns:0, limit:count*2, scores:Array(count).fill(0),
     open:TILES, picked:0, dice:null, lastDice:null, winner:null, draw:false, notice:'',

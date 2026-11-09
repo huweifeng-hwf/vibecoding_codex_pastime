@@ -41,7 +41,6 @@ function start(platform) {
   let finishedMatch, profileDetail, showArchived = false, historyProfile = null, starterProfile = null;
   const friends = [null,null];
   let activeGame = GAMES[0].id, recordsGame = GAMES[0].id, playerCount = 2, recordsCount = 2;
-  let gamePage = 0;
   const multiplayerRecords = new Map(GAMES.filter(game => game.rules).map(({ id }) => [
     id, new Map((variableCount(id) ? PLAYER_COUNTS : [2]).map(count => [count, Records.loadMultiplayer(storage, id, count)])),
   ]));
@@ -68,8 +67,9 @@ function start(platform) {
   const isArchived = id => journal.archivedProfiles?.includes(id) ?? false;
   const matchPlayer = (match,seat) => nickname(match.players[seat]) || `游客 ${seatName(match.game,seat)}`;
   const namedPlayer = seat => nickname(roundPlayers[seatIndex(activeGame,seat)]);
+  const requestFrame = platform.requestFrame || (fn => setTimeout(() => fn(Date.now()),16));
   const extraUI = createExtraUI({
-    ctx,text,box,button,seatText,seatButton,roundControls,saveStatus,render,
+    ctx,text,box,button,seatText,seatButton,roundControls,saveStatus,render,requestFrame,
     label: seat => namedPlayer(seat) || playerLabel(seat),
     hit: button => buttons.push(button),
     update: next => {
@@ -80,19 +80,18 @@ function start(platform) {
     },
     animate: step => {
       const running = game;
-      const schedule = platform.requestFrame || (fn => setTimeout(() => fn(Date.now()),16));
       let previous;
       const frame = time => {
         if (scene !== 'game' || game !== running) return;
-        const seconds = previous === undefined ? 0 : Math.max(0,Math.min(0.04,(time-previous)/1000));
+        const seconds = previous === undefined ? 0 : Math.max(0,Math.min(0.075,(time-previous)/1000));
         previous = time;
         step(running,seconds);
         if (running.winner !== null) saveMatch();
         render();
-        if (running.phase === 'playing') schedule(frame);
+        if (running.phase === 'playing') requestFrame(frame);
       };
       render();
-      schedule(frame);
+      requestFrame(frame);
     },
   });
   const boardRoster = () => roundPlayers.some(id => id !== null)
@@ -285,7 +284,7 @@ function start(platform) {
       }
       newRound(done ? 1-roundFirst : roundFirst);
     };
-    const leave = () => { scene = 'home'; render(); };
+    const leave = () => { extraUI.reset(); scene = 'home'; render(); };
     return {
       restart: () => done ? restart() : confirm('重新开局？未完成的对局不计入战绩。', restart),
       leave: () => done ? leave() : confirm('离开本局？未完成的对局不计入战绩。', leave),
@@ -307,19 +306,22 @@ function start(platform) {
     return saved ? '战绩已保存在本机' : '保存失败，本次战绩仅在当前会话有效';
   }
 
-  function drawGameCards(left, top, w, choosePlayers = false) {
-    const cardWidth = (w-12)/2;
-    const size = 4;
-    GAMES.slice(gamePage*size,gamePage*size+size).forEach(({ id, title, description }, i) => {
-      const x = left+(i%2)*(cardWidth+12);
-      const y = top+150+Math.floor(i/2)*110;
-      box(x,y,cardWidth,96,colors.panel);
-      text(title,x+cardWidth/2,y+(choosePlayers ? 32 : 24),22);
-      text(description,x+cardWidth/2,y+(choosePlayers ? 63 : 48),13,colors.muted);
-      buttons.push({x,y,w:cardWidth,h:choosePlayers ? 96 : 63,action:() => openGame(id,choosePlayers)});
-      if (!choosePlayers) button('选玩家 ›',x,y+63,cardWidth,33,() => openGame(id,true,'home'),'#2a3957',14);
+  function drawGameCards(left, top, w, footerHeight, choosePlayers = false) {
+    const gap = 8, cardWidth = (w-gap)/2, rows = Math.ceil(GAMES.length/2);
+    const gridTop = top+88, footerGap = 11, rowsGap = (rows-1)*gap;
+    const available = height-safeBottom-8-gridTop-rowsGap-footerGap-footerHeight;
+    const cardHeight = Math.min(61,available/rows);
+    const playHeight = choosePlayers ? cardHeight : cardHeight-22;
+    GAMES.forEach(({ id, title, description }, i) => {
+      const x = left+(i%2)*(cardWidth+gap);
+      const y = gridTop+Math.floor(i/2)*(cardHeight+gap);
+      box(x,y,cardWidth,cardHeight,colors.panel);
+      text(title,x+cardWidth/2,y+playHeight*0.33,16);
+      text(description,x+cardWidth/2,y+playHeight*0.78,11,colors.muted);
+      buttons.push({x,y,w:cardWidth,h:playHeight,action:() => openGame(id,choosePlayers)});
+      if (!choosePlayers) button('选玩家 ›',x,y+playHeight,cardWidth,22,() => openGame(id,true,'home'),'#2a3957',11);
     });
-    pager(left+w/2,left,top+104,w,gamePage,GAMES.length,size,index => { gamePage = index; render(); });
+    return gridTop+rows*cardHeight+rowsGap+footerGap;
   }
 
   function countButtons(left, y, w, selected, select) {
@@ -1187,27 +1189,27 @@ function start(platform) {
     if (seatingGame) button('座位：并排 · 切换面对面',left,top,w,34,toggleSeating);
     else if (!extraGame || (activeGame !== 'pong' && activeGame !== 'hockey')) text('DUO / 一起玩',cx,top+15,15,colors.O);
     if (scene === 'home') {
-      text('双人互动小游戏大全',cx,top+76,26);
-      drawGameCards(left,top,w);
-      if (online) button('井字棋 · 好友联机',left,top+369,w,49,() => {
+      text('一起玩 · 11 款同屏游戏',cx,top+53,24);
+      const footerY = drawGameCards(left,top,w,online ? 77 : 39);
+      if (online) button('井字棋 · 好友联机',left,footerY,w,31,() => {
         scene = 'online';
         online.open();
         render();
       },'#395a69');
-      button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
-      const half = (w-8)/2;
-      button('选玩家开局',left,top+493,half,42,() => {
+      const actionY = footerY+(online ? 38 : 0);
+      const third = (w-12)/3;
+      button('本机战绩',left,actionY,third,39,()=>{scene='records';render();},colors.panel,14);
+      button('选玩家开局',left+third+6,actionY,third,39,() => {
         starterProfile = null;
         go('chooseGame');
-      });
-      button('玩家档案',left+half+8,top+493,half,42,() => {
+      },colors.panel,14);
+      button('玩家档案',left+2*(third+6),actionY,third,39,() => {
         recordsTab = 'profiles';
         showArchived = false;
         page = 0;
         profileMessage = '';
         go('records');
-      });
-      text('无需登录 · 战绩仅保存在此设备',cx,top+557,13,colors.muted);
+      },colors.panel,14);
     } else if (scene === 'online' || scene === 'roomCode') {
       drawOnline(cx,top,left,w);
     } else if (scene === 'setup') {
@@ -1227,10 +1229,10 @@ function start(platform) {
       }
       button('选本机玩家',left,top+(activeGame === 'flight' ? 487 : 339),w,42,() => openRoster('setup'));
     } else if (scene === 'chooseGame') {
-      text('选玩家开局',cx,top+76,26);
-      if (starterProfile) text(`已选 ${nickname(starterProfile)}`,cx,top+95,13,colors.muted);
-      drawGameCards(left,top,w,true);
-      button(starterProfile ? '返回玩家档案' : '返回大厅',left,top+434,w,50,() => go(starterProfile ? 'profileDetail' : 'home'));
+      text('选玩家开局',cx,top+50,24);
+      if (starterProfile) text(`已选 ${nickname(starterProfile)}`,cx,top+72,13,colors.muted);
+      const footerY = drawGameCards(left,top,w,40,true);
+      button(starterProfile ? '返回玩家档案' : '返回大厅',left,footerY,w,40,() => go(starterProfile ? 'profileDetail' : 'home'));
     } else if (scene === 'roster') {
       drawRoster(cx,top,left,w);
     } else if (scene === 'profilePicker') {
