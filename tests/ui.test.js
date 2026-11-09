@@ -152,14 +152,14 @@ test('面对面布局保持棋盘坐标，两端可操作并共用战绩', () =>
   assert.equal(JSON.parse(storage.get(JOURNAL_KEY)).matches[0].winner,0);
 });
 
-test('本机档案换座后按人计算交手榜，重启保留历史和旧座位战绩', () => {
+test('本机档案开局、换座、改名、删除与恢复后，历史和旧座位战绩保持完整', () => {
   const { KEY } = require('../src/records');
   const legacy = JSON.stringify({
     version: 1, rounds: 1, draws: 0,
     X: { wins: 1, bestMoves: 3 }, O: { wins: 0, bestMoves: null },
   });
   const storage = new Map([[KEY,legacy]]);
-  let labels, tap, prompt;
+  let labels, tap, prompt, confirm;
   function launch() {
     labels = new Map();
     start({
@@ -172,6 +172,7 @@ test('本机档案换座后按人计算交手榜，重启保留历史和旧座�
       onTap: handler => { tap = (x,y) => { labels.clear(); handler(x,y); }; },
       onResize() {},
       prompt: (_,accept) => { prompt = value => { labels.clear(); accept(value); }; },
+      confirm: (_,accept) => { confirm = accept; },
     });
   }
   function press(label) {
@@ -186,7 +187,6 @@ test('本机档案换座后按人计算交手榜，重启保留历史和旧座�
   function winAsX() {
     press('开始对局');
     for (const point of [[78,228],[78,344],[195,228],[195,344],[312,228]]) tap(...point);
-    press('返回大厅');
   }
 
   launch();
@@ -199,6 +199,10 @@ test('本机档案换座后按人计算交手榜，重启保留历史和旧座�
   press('新建玩家');
   prompt('小周');
   winAsX();
+  press('本局记录');
+  assert.ok(labels.has('X · 小林 · 先手'));
+  press('返回逐局历史');
+  press('返回大厅');
 
   chooseGame();
   assert.ok(labels.has('沿用上次玩家'));
@@ -207,6 +211,7 @@ test('本机档案换座后按人计算交手榜，重启保留历史和旧座�
   press('O · 游客');
   press('小林');
   winAsX();
+  press('返回大厅');
 
   launch();
   press('本机战绩');
@@ -229,4 +234,51 @@ test('本机档案换座后按人计算交手榜，重启保留历史和旧座�
   assert.ok(labels.has('平局 0 · 其他玩家获胜 0'));
   press('五子棋');
   assert.ok(labels.has('共同完成 0 局'));
+  press('玩家档案');
+  press('小林 ›');
+  assert.ok(labels.has('2 局 · 1 胜'));
+  press('编辑昵称');
+  prompt('林同学');
+  assert.ok(labels.has('林同学'));
+  press('用该玩家开局');
+  press('井字棋');
+  assert.ok(labels.has('X · 林同学'));
+  press('返回');
+  press('返回玩家档案');
+  press('返回玩家档案');
+  press('林同学 ›');
+  press('删除玩家');
+  confirm();
+  assert.ok(!labels.has('林同学 ›'));
+  assert.deepEqual(JSON.parse(storage.get(JOURNAL_KEY)).archivedProfiles,[1]);
+  launch();
+  chooseGame();
+  press('沿用上次玩家');
+  assert.ok(labels.has('X · 小周'));
+  assert.ok(labels.has('O · 游客'));
+  press('O · 游客');
+  assert.ok(!labels.has('林同学'));
+  press('返回');
+  press('返回');
+  press('返回大厅');
+  press('玩家档案');
+  press('已删除');
+  press('林同学 ›');
+  assert.ok(labels.has('2 局 · 1 胜'));
+  press('查看对局历史');
+  assert.ok(labels.has('仅看 林同学 · 清除'));
+  assert.ok(labels.has('林同学获胜 · 2 人 ›'));
+  press('好友交手榜');
+  assert.ok(labels.has('1. 小周 · 1 胜 / 2 局'));
+  assert.ok(!labels.has('1. 林同学 · 1 胜 / 2 局'));
+  press('选好友 A');
+  assert.ok(!labels.has('林同学'));
+  press('返回');
+  press('玩家档案');
+  press('林同学 ›');
+  press('恢复玩家');
+  assert.ok(labels.has('林同学 ›'));
+  const journal = JSON.parse(storage.get(JOURNAL_KEY));
+  assert.deepEqual(journal.archivedProfiles,[]);
+  assert.deepEqual(journal.matches.map(match => match.players),[[1,2],[2,1]]);
 });
