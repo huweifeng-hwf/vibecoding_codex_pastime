@@ -1,7 +1,17 @@
 'use strict';
 const { createGame, play } = require('./game');
 const Gomoku = require('./gomoku');
+const Memory = require('./memory');
 const Records = require('./records');
+
+const GAMES = [
+  { id: 'ticTacToe', title: '井字棋', description: '2 人 · 连成三子' },
+  { id: 'gomoku', title: '五子棋', description: '2 人 · 自由连五' },
+  { id: 'memory', title: '翻牌配对', description: '2–4 人 · 记忆对战' },
+];
+const SEAT_COLORS = ['#ffad98', '#80dfd4', '#ffd67d', '#c4b5ff'];
+const playerLabel = seat => `玩家 ${seat + 1}`;
+const isMemoryDone = game => game.winner !== null || game.draw;
 function start(platform) {
   const { canvas, storage } = platform;
   const ctx = canvas.getContext('2d');
@@ -10,29 +20,60 @@ function start(platform) {
   let records = Records.load(storage);
   let gomokuRecords = Records.loadGomoku(storage);
   let first = 'X', gomokuFirst = 'black';
-  let playingGomoku = false, showingGomokuRecords = false;
+  let activeGame = GAMES[0].id, recordsGame = GAMES[0].id, playerCount = 2, recordsCount = 2;
+  const memoryRecords = new Map(Memory.PLAYER_COUNTS.map(count => [count, Records.loadMemory(storage, count)]));
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
   function box(x,y,w,h,color) { ctx.fillStyle = color; ctx.fillRect(x,y,w,h); }
   function button(label,x,y,w,h,action,color = colors.panel) { box(x,y,w,h,color); text(label,x+w/2,y+h/2,17); buttons.push({x,y,w,h,action}); }
   const playerNames = { black: '黑方', white: '白方' };
   function newRound() {
-    game = playingGomoku ? Gomoku.createGame(gomokuFirst) : createGame(first);
+    game = activeGame === 'gomoku' ? Gomoku.createGame(gomokuFirst) : createGame(first);
     scene = 'game';
     render();
   }
 
-  function openGame(gomoku) {
-    playingGomoku = gomoku;
+  function openGame(id) {
+    activeGame = id;
+    if (id === 'memory') {
+      playerCount = 2;
+      scene = 'setup';
+      render();
+      return;
+    }
     newRound();
   }
 
+  function startMemory(firstSeat) {
+    game = Memory.createGame(playerCount, firstSeat);
+    scene = 'game';
+    render();
+  }
+
+  function flipCard(index) {
+    const next = Memory.flip(game, index);
+    if (next === game) return;
+    game = next;
+    if (isMemoryDone(game)) {
+      const stats = Records.recordMemory(memoryRecords.get(playerCount), game);
+      memoryRecords.set(playerCount, stats);
+      saved = Records.save(storage, stats, Records.memoryKey(playerCount));
+    } else if (game.open.length === 2) {
+      setTimeout(() => {
+        if (scene !== 'game' || game !== next) return;
+        game = Memory.hideMismatch(next);
+        render();
+      }, 850);
+    }
+    render();
+  }
+
   function commitMove(index) {
-    const next = playingGomoku ? Gomoku.play(game, index) : play(game, index);
+    const next = activeGame === 'gomoku' ? Gomoku.play(game, index) : play(game, index);
     if (next === game) return;
     game = next;
     if (game.winner || game.draw) {
-      if (playingGomoku) {
+      if (activeGame === 'gomoku') {
         gomokuRecords = Records.recordGomoku(gomokuRecords, game);
         saved = Records.save(storage, gomokuRecords, Records.GOMOKU_KEY);
       } else {
@@ -45,14 +86,19 @@ function start(platform) {
 
   function roundControls(done, left, y, w) {
     const restart = () => {
-      if (playingGomoku) {
+      if (activeGame === 'memory') {
+        startMemory(done ? (game.first + 1) % playerCount : game.first);
+        return;
+      }
+      if (activeGame === 'gomoku') {
         if (done) gomokuFirst = Gomoku.other(gomokuFirst);
       } else {
         first = first === 'X' ? 'O' : 'X';
       }
       newRound();
     };
-    button(done ? '再来一局 · 交换先手' : '重新开局（不计战绩）', left,y,w,48,() => {
+    const rematch = activeGame === 'memory' ? '再来一局 · 轮换先手' : '再来一局 · 交换先手';
+    button(done ? rematch : '重新开局（不计战绩）', left,y,w,48,() => {
       if (done) restart();
       else platform.confirm('重新开局？未完成的对局不计入战绩。', restart);
     });
@@ -67,11 +113,58 @@ function start(platform) {
     return saved ? '战绩已保存在本机' : '保存失败，本次战绩仅在当前会话有效';
   }
 
-  function gameCard(title, description, left, y, w, action) {
-    box(left,y,w,114,colors.panel);
-    text(title,left+w/2,y+27,24);
-    text(description,left+w/2,y+57,15,colors.muted);
-    button('开始对战',left,y+74,w,40,action,'#395a69');
+  function drawGameCards(left, top, w) {
+    const cardWidth = (w-12)/2;
+    GAMES.forEach(({ id, title, description }, i) => {
+      const x = left+(i%2)*(cardWidth+12);
+      const y = top+150+Math.floor(i/2)*110;
+      box(x,y,cardWidth,96,colors.panel);
+      text(title,x+cardWidth/2,y+32,22);
+      text(description,x+cardWidth/2,y+63,13,colors.muted);
+      buttons.push({x,y,w:cardWidth,h:96,action:() => openGame(id)});
+    });
+  }
+
+  function countButtons(left, y, w, selected, select) {
+    const tabWidth = (w-16)/3;
+    Memory.PLAYER_COUNTS.forEach((count,i) => {
+      button(`${count} 人`,left+i*(tabWidth+8),y,tabWidth,44,() => select(count),
+        count === selected ? '#395a69' : colors.panel);
+    });
+  }
+
+  function drawMemory(cx, top, left, w) {
+    const done = isMemoryDone(game);
+    const title = game.draw ? '配对数并列 · 平局' :
+      done ? `${playerLabel(game.winner)}获胜！` : `轮到${playerLabel(game.turn)}`;
+    text(title,cx,top+58,26);
+    const scoreWidth = w/playerCount;
+    game.scores.forEach((score,seat) => {
+      text(`${seat+1} 号 · ${score} 对`,left+(seat+0.5)*scoreWidth,top+92,14,SEAT_COLORS[seat]);
+    });
+
+    const by = top+113;
+    const size = Math.min(w,height-safeBottom-by-165);
+    const bx = cx-size/2;
+    const cell = size/Memory.GRID_SIZE;
+    game.cards.forEach((symbol,i) => {
+      const x = bx+(i%Memory.GRID_SIZE)*cell;
+      const y = by+Math.floor(i/Memory.GRID_SIZE)*cell;
+      const owner = game.owners[i];
+      const matched = owner !== null;
+      const open = game.open.includes(i);
+      box(x+3,y+3,cell-6,cell-6,matched ? SEAT_COLORS[owner] : open ? '#f5f1e9' : colors.panel);
+      text(matched || open ? symbol : '?',x+cell/2,y+cell*(matched ? 0.40 : 0.50),
+        cell*0.43,matched || open ? colors.bg : colors.muted);
+      if (matched) text(`${owner+1} 号`,x+cell/2,y+cell*0.76,12,colors.bg);
+      if (!done && !matched && !open && game.open.length < 2) {
+        buttons.push({x,y,w:cell,h:cell,action:() => flipCard(i)});
+      }
+    });
+    const y = by+size+12;
+    const hint = game.open.length === 2 ? '未配对，即将换人' : '每次翻两张，配对成功可继续';
+    text(done ? saveStatus() : hint,cx,y+14,13,colors.muted);
+    roundControls(done,left,y+33,w);
   }
 
   function drawGomoku(cx, top, left, w) {
@@ -129,20 +222,34 @@ function start(platform) {
     if (scene === 'home') {
       text('双人互动小游戏大全',cx,top+76,26);
       text('一块屏幕，两个人，一点胜负欲。',cx,top+115,15,colors.muted);
-      gameCard('井字棋','双人同屏 · 约 1 分钟',left,top+150,w,() => openGame(false));
-      gameCard('五子棋','双人同屏 · 轮流落子',left,top+285,w,() => openGame(true));
+      drawGameCards(left,top,w);
       button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
       text('无需登录 · 战绩仅保存在此设备',cx,top+519,13,colors.muted);
+    } else if (scene === 'setup') {
+      text('翻牌配对',cx,top+76,29);
+      text('选择同屏玩家人数',cx,top+123,17,colors.muted);
+      countButtons(left,top+150,w,playerCount,count => { playerCount = count; render(); });
+      button('开始配对',left,top+218,w,48,() => startMemory(0),'#395a69');
+      button('返回大厅',left,top+280,w,46,() => { scene = 'home'; render(); });
     } else if (scene === 'records') {
       text('本机战绩',cx,top+69,29);
-      const tabWidth = (w-10)/2;
-      button('井字棋',left,top+105,tabWidth,42,() => {showingGomokuRecords=false;render();},
-        showingGomokuRecords ? colors.panel : '#395a69');
-      button('五子棋',left+tabWidth+10,top+105,tabWidth,42,() => {showingGomokuRecords=true;render();},
-        showingGomokuRecords ? '#395a69' : colors.panel);
-      const stats = showingGomokuRecords ? gomokuRecords : records;
-      text(`完成 ${stats.rounds} 局 · 平局 ${stats.draws} 局`,cx,top+175,17,colors.muted);
-      if (showingGomokuRecords) {
+      const tabWidth = (w-16)/GAMES.length;
+      GAMES.forEach(({ id, title },i) => {
+        button(title,left+i*(tabWidth+8),top+105,tabWidth,42,() => { recordsGame = id; render(); },
+          recordsGame === id ? '#395a69' : colors.panel);
+      });
+      const stats = recordsGame === 'memory' ? memoryRecords.get(recordsCount) :
+        recordsGame === 'gomoku' ? gomokuRecords : records;
+      const statsY = recordsGame === 'memory' ? top+219 : top+175;
+      text(`完成 ${stats.rounds} 局 · 平局 ${stats.draws} 局`,cx,statsY,17,colors.muted);
+      if (recordsGame === 'memory') {
+        countButtons(left,top+156,w,recordsCount,count => { recordsCount = count; render(); });
+        stats.wins.forEach((wins,seat) => {
+          const y = top+242+seat*43;
+          box(left,y,w,37,colors.panel);
+          text(`${playerLabel(seat)} · ${wins} 胜`,cx,y+18,17,SEAT_COLORS[seat]);
+        });
+      } else if (recordsGame === 'gomoku') {
         ['black','white'].forEach((player,i) => {
           const y = top+210+i*95;
           box(left,y,w,75,colors.panel);
@@ -153,7 +260,9 @@ function start(platform) {
       }
       text('胜场按本机座位记录',cx,top+437,13,colors.muted);
       button('返回大厅',left,top+470,w,50,()=>{scene='home';render();});
-    } else if (playingGomoku) {
+    } else if (activeGame === 'memory') {
+      drawMemory(cx,top,left,w);
+    } else if (activeGame === 'gomoku') {
       drawGomoku(cx,top,left,w);
     } else {
       const done = game.winner || game.draw;

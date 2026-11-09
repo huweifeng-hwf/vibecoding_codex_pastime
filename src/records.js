@@ -29,6 +29,21 @@ function recordGomoku(records, game) {
   const outcome = game.winner || 'draws';
   return { ...records, rounds: records.rounds + 1, [outcome]: records[outcome] + 1 };
 }
+function memoryKey(count) { return `duo.memory.${count}.records.v1`; }
+function loadMemory(storage, count) {
+  const validCount = value => Number.isSafeInteger(value) && value >= 0;
+  return read(storage, memoryKey(count), value => value &&
+    validCount(value.rounds) && validCount(value.draws) &&
+    Array.isArray(value.wins) && value.wins.length === count && value.wins.every(validCount) &&
+    value.rounds === value.draws + value.wins.reduce((sum, wins) => sum + wins, 0),
+  () => ({ rounds: 0, draws: 0, wins: Array(count).fill(0) }));
+}
+
+function recordMemory(records, game) {
+  const wins = records.wins.slice();
+  if (!game.draw) wins[game.winner]++;
+  return { rounds: records.rounds + 1, draws: records.draws + Number(game.draw), wins };
+}
 function record(records, game) {
   if (!game.winner && !game.draw) return records;
   const next = JSON.parse(JSON.stringify(records)); next.rounds++;
@@ -37,4 +52,4 @@ function record(records, game) {
   return next;
 }
 function save(storage, records, key = KEY) { try { storage.set(key, JSON.stringify(records)); return true; } catch { return false; } }
-module.exports = { KEY, GOMOKU_KEY, empty, load, loadGomoku, record, recordGomoku, save };
+module.exports = { KEY, GOMOKU_KEY, empty, load, loadGomoku, record, recordGomoku, memoryKey, loadMemory, recordMemory, save };

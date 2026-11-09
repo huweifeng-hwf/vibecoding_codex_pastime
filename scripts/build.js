@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'..');
-function bundle(entry){const names=['game','gomoku','records','app',entry];return `(function(){const modules={${names.map(n=>`${JSON.stringify('./'+n)}:function(require,module,exports){\n${fs.readFileSync(path.join(root,'src',n+'.js'),'utf8')}\n}`).join(',')}};const cache={};function require(n){if(cache[n])return cache[n].exports;const m={exports:{}};cache[n]=m;modules[n](require,m,m.exports);return m.exports;}require('./${entry}');})();`;}
+function bundle(entry){const names=['game','gomoku','memory','records','app',entry];return `(function(){const modules={${names.map(n=>`${JSON.stringify('./'+n)}:function(require,module,exports){\n${fs.readFileSync(path.join(root,'src',n+'.js'),'utf8')}\n}`).join(',')}};const cache={};function require(n){if(cache[n])return cache[n].exports;const m={exports:{}};cache[n]=m;modules[n](require,m,m.exports);return m.exports;}require('./${entry}');})();`;}
 for(const target of ['web','wechat'])fs.mkdirSync(path.join(root,'dist',target),{recursive:true});
 fs.writeFileSync(path.join(root,'dist/web/game.js'),bundle('browser'));
 fs.copyFileSync(path.join(root,'web/index.html'),path.join(root,'dist/web/index.html'));
