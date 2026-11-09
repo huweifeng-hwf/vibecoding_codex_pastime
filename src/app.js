@@ -2,13 +2,16 @@
 const { createGame, play } = require('./game');
 const Gomoku = require('./gomoku');
 const Memory = require('./memory');
+const Flight = require('./flight');
 const Records = require('./records');
 
 const GAMES = [
   { id: 'ticTacToe', title: '井字棋', description: '2 人 · 连成三子' },
   { id: 'gomoku', title: '五子棋', description: '2 人 · 自由连五' },
-  { id: 'memory', title: '翻牌配对', description: '2–4 人 · 记忆对战' },
+  { id: 'memory', title: '翻牌配对', description: '2–4 人 · 记忆对战', start: '开始配对', rules: Memory },
+  { id: 'flight', title: '飞行棋', description: '2–4 人 · 双机快局', start: '开始飞行', rules: Flight },
 ];
+const PLAYER_COUNTS = [2, 3, 4];
 const SEAT_COLORS = ['#ffad98', '#80dfd4', '#ffd67d', '#c4b5ff'];
 const playerLabel = seat => `玩家 ${seat + 1}`;
 const isMemoryDone = game => game.winner !== null || game.draw;
@@ -21,7 +24,9 @@ function start(platform) {
   let gomokuRecords = Records.loadGomoku(storage);
   let first = 'X', gomokuFirst = 'black';
   let activeGame = GAMES[0].id, recordsGame = GAMES[0].id, playerCount = 2, recordsCount = 2;
-  const memoryRecords = new Map(Memory.PLAYER_COUNTS.map(count => [count, Records.loadMemory(storage, count)]));
+  const multiplayerRecords = new Map(GAMES.filter(game => game.rules).map(({ id }) => [
+    id, new Map(PLAYER_COUNTS.map(count => [count, Records.loadMultiplayer(storage, id, count)])),
+  ]));
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
   function box(x,y,w,h,color) { ctx.fillStyle = color; ctx.fillRect(x,y,w,h); }
@@ -35,7 +40,7 @@ function start(platform) {
 
   function openGame(id) {
     activeGame = id;
-    if (id === 'memory') {
+    if (multiplayerRecords.has(id)) {
       playerCount = 2;
       scene = 'setup';
       render();
@@ -44,9 +49,24 @@ function start(platform) {
     newRound();
   }
 
-  function startMemory(firstSeat) {
-    game = Memory.createGame(playerCount, firstSeat);
+  function startMultiplayer(firstSeat) {
+    const { rules } = GAMES.find(({ id }) => id === activeGame);
+    game = rules.createGame(playerCount, firstSeat);
     scene = 'game';
+    render();
+  }
+
+  function saveMultiplayer() {
+    const recordsByCount = multiplayerRecords.get(activeGame);
+    const stats = Records.recordMultiplayer(recordsByCount.get(playerCount), game);
+    recordsByCount.set(playerCount, stats);
+    saved = Records.save(storage, stats, Records.multiplayerKey(activeGame, playerCount));
+  }
+
+  function playFlight(next) {
+    if (next === game) return;
+    game = next;
+    if (game.winner !== null) saveMultiplayer();
     render();
   }
 
@@ -55,9 +75,7 @@ function start(platform) {
     if (next === game) return;
     game = next;
     if (isMemoryDone(game)) {
-      const stats = Records.recordMemory(memoryRecords.get(playerCount), game);
-      memoryRecords.set(playerCount, stats);
-      saved = Records.save(storage, stats, Records.memoryKey(playerCount));
+      saveMultiplayer();
     } else if (game.open.length === 2) {
       setTimeout(() => {
         if (scene !== 'game' || game !== next) return;
@@ -86,8 +104,8 @@ function start(platform) {
 
   function roundControls(done, left, y, w) {
     const restart = () => {
-      if (activeGame === 'memory') {
-        startMemory(done ? (game.first + 1) % playerCount : game.first);
+      if (multiplayerRecords.has(activeGame)) {
+        startMultiplayer(done ? (game.first + 1) % playerCount : game.first);
         return;
       }
       if (activeGame === 'gomoku') {
@@ -97,7 +115,7 @@ function start(platform) {
       }
       newRound();
     };
-    const rematch = activeGame === 'memory' ? '再来一局 · 轮换先手' : '再来一局 · 交换先手';
+    const rematch = multiplayerRecords.has(activeGame) ? '再来一局 · 轮换先手' : '再来一局 · 交换先手';
     button(done ? rematch : '重新开局（不计战绩）', left,y,w,48,() => {
       if (done) restart();
       else platform.confirm('重新开局？未完成的对局不计入战绩。', restart);
@@ -127,7 +145,7 @@ function start(platform) {
 
   function countButtons(left, y, w, selected, select) {
     const tabWidth = (w-16)/3;
-    Memory.PLAYER_COUNTS.forEach((count,i) => {
+    PLAYER_COUNTS.forEach((count,i) => {
       button(`${count} 人`,left+i*(tabWidth+8),y,tabWidth,44,() => select(count),
         count === selected ? '#395a69' : colors.panel);
     });
@@ -165,6 +183,69 @@ function start(platform) {
     const hint = game.open.length === 2 ? '未配对，即将换人' : '每次翻两张，配对成功可继续';
     text(done ? saveStatus() : hint,cx,y+14,13,colors.muted);
     roundControls(done,left,y+33,w);
+  }
+
+  function drawFlight(cx, top, left, w) {
+    const done = game.winner !== null;
+    text(done ? `${playerLabel(game.winner)}获胜！` : `轮到${playerLabel(game.turn)}`,cx,top+58,26);
+    game.planes.forEach((pair,seat) => {
+      const arrived = pair.filter(progress => progress === Flight.FINISH).length;
+      text(`${seat+1} 号 · ${arrived}/2`,left+(seat+0.5)*w/playerCount,top+92,14,SEAT_COLORS[seat]);
+    });
+
+    const by = top+113;
+    const size = Math.min(w,height-safeBottom-by-212);
+    const bx = cx-size/2;
+    const cell = size/Flight.GRID_SIZE;
+    const square = ([col,row], color, label = '', ink = colors.ink) => {
+      box(bx+col*cell+1,by+row*cell+1,cell-2,cell-2,color);
+      if (label) text(label,bx+(col+0.5)*cell,by+(row+0.5)*cell,cell*0.45,ink);
+    };
+    for (let i=0; i<Flight.LAP; i++) square(Flight.trackPoint(i),colors.panel);
+    ['→','↓','←','↑'].forEach((arrow,quarter) => {
+      square(Flight.trackPoint(quarter*6),colors.panel,arrow,colors.muted);
+    });
+    square([3,3],'#395a69','终');
+    game.quarters.forEach((quarter,seat) => {
+      const color = SEAT_COLORS[seat];
+      square(Flight.planePoint(quarter,0,0),color,`${seat+1}`,colors.bg);
+      for (let progress=Flight.LAP; progress<Flight.FINISH; progress++) {
+        square(Flight.planePoint(quarter,0,progress),'#395a69',`${seat+1}`);
+      }
+      for (let plane=0; plane<2; plane++) square(Flight.planePoint(quarter,plane,Flight.HANGAR),colors.panel);
+    });
+    game.planes.forEach((pair,seat) => {
+      pair.forEach((progress,plane) => {
+        if (progress === Flight.FINISH) return;
+        const [col,row] = Flight.planePoint(game.quarters[seat],plane,progress);
+        const x = bx+col*cell, y = by+row*cell;
+        const selectable = seat === game.turn && Flight.canMove(game,plane);
+        box(x+cell*0.12,y+cell*0.12,cell*0.76,cell*0.76,selectable ? colors.ink : SEAT_COLORS[seat]);
+        text(`${seat+1}${plane === 0 ? 'A' : 'B'}`,x+cell/2,y+cell/2,cell*0.37,colors.bg);
+        if (selectable) buttons.push({x,y,w:cell,h:cell,action:() => playFlight(Flight.move(game,plane))});
+      });
+    });
+
+    const y = by+size+10;
+    const hint = game.die !== null ? `掷出 ${game.die} · 选择飞机` :
+      game.lastRoll === null ? '掷到 6 可起飞，终点需要刚好到达' :
+      `骰子 ${game.lastRoll}${game.notice ? ' · '+game.notice : ''}`;
+    text(done ? saveStatus() : hint,cx,y+14,13,colors.muted);
+    if (!done && game.die === null) {
+      button('掷骰子',left,y+29,w,44,() => playFlight(Flight.roll(game,1+Math.floor(Math.random()*6))),'#395a69');
+    } else if (!done) {
+      const half = (w-10)/2;
+      ['A','B'].forEach((label,plane) => {
+        const x = left+plane*(half+10);
+        if (Flight.canMove(game,plane)) {
+          button(`移动飞机 ${label}`,x,y+29,half,44,() => playFlight(Flight.move(game,plane)),'#395a69');
+        } else {
+          box(x,y+29,half,44,colors.panel);
+          text(`飞机 ${label} 不可走`,x+half/2,y+51,14,colors.muted);
+        }
+      });
+    }
+    roundControls(done,left,done ? y+33 : y+84,w);
   }
 
   function drawGomoku(cx, top, left, w) {
@@ -221,15 +302,16 @@ function start(platform) {
     text('DUO / 一起玩',cx,top+15,15,colors.O);
     if (scene === 'home') {
       text('双人互动小游戏大全',cx,top+76,26);
-      text('一块屏幕，两个人，一点胜负欲。',cx,top+115,15,colors.muted);
+      text('一块屏幕，轮流玩，一点胜负欲。',cx,top+115,15,colors.muted);
       drawGameCards(left,top,w);
       button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
       text('无需登录 · 战绩仅保存在此设备',cx,top+519,13,colors.muted);
     } else if (scene === 'setup') {
-      text('翻牌配对',cx,top+76,29);
+      const { title, start } = GAMES.find(({ id }) => id === activeGame);
+      text(title,cx,top+76,29);
       text('选择同屏玩家人数',cx,top+123,17,colors.muted);
       countButtons(left,top+150,w,playerCount,count => { playerCount = count; render(); });
-      button('开始配对',left,top+218,w,48,() => startMemory(0),'#395a69');
+      button(start,left,top+218,w,48,() => startMultiplayer(0),'#395a69');
       button('返回大厅',left,top+280,w,46,() => { scene = 'home'; render(); });
     } else if (scene === 'records') {
       text('本机战绩',cx,top+69,29);
@@ -238,11 +320,13 @@ function start(platform) {
         button(title,left+i*(tabWidth+8),top+105,tabWidth,42,() => { recordsGame = id; render(); },
           recordsGame === id ? '#395a69' : colors.panel);
       });
-      const stats = recordsGame === 'memory' ? memoryRecords.get(recordsCount) :
+      const recordsByCount = multiplayerRecords.get(recordsGame);
+      const stats = recordsByCount ? recordsByCount.get(recordsCount) :
         recordsGame === 'gomoku' ? gomokuRecords : records;
-      const statsY = recordsGame === 'memory' ? top+219 : top+175;
-      text(`完成 ${stats.rounds} 局 · 平局 ${stats.draws} 局`,cx,statsY,17,colors.muted);
-      if (recordsGame === 'memory') {
+      const statsY = recordsByCount ? top+219 : top+175;
+      const summary = `完成 ${stats.rounds} 局`;
+      text(recordsGame === 'flight' ? summary : `${summary} · 平局 ${stats.draws} 局`,cx,statsY,17,colors.muted);
+      if (recordsByCount) {
         countButtons(left,top+156,w,recordsCount,count => { recordsCount = count; render(); });
         stats.wins.forEach((wins,seat) => {
           const y = top+242+seat*43;
@@ -260,6 +344,8 @@ function start(platform) {
       }
       text('胜场按本机座位记录',cx,top+437,13,colors.muted);
       button('返回大厅',left,top+470,w,50,()=>{scene='home';render();});
+    } else if (activeGame === 'flight') {
+      drawFlight(cx,top,left,w);
     } else if (activeGame === 'memory') {
       drawMemory(cx,top,left,w);
     } else if (activeGame === 'gomoku') {

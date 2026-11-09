@@ -1,6 +1,5 @@
 'use strict';
 
-const PLAYER_COUNTS = [2, 3, 4];
 const GRID_SIZE = 4;
 const SYMBOLS = ['★', '●', '▲', '◆', '■', '✚', '☀', '♥'];
 
@@ -41,4 +40,4 @@ function hideMismatch(game) {
   return { ...game, open: [], turn: (game.turn + 1) % game.scores.length };
 }
 
-module.exports = { PLAYER_COUNTS, GRID_SIZE, createGame, flip, hideMismatch };
+module.exports = { GRID_SIZE, createGame, flip, hideMismatch };
