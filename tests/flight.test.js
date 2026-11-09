@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Flight = require('../src/flight');
 const { start } = require('../src/app');
-const { multiplayerKey } = require('../src/records');
+const { JOURNAL_KEY, multiplayerKey } = require('../src/records');
 
 test('飞行棋无棋可走时换人，掷 6 起飞后再掷，防止重复掷骰和叠子', () => {
   let game = Flight.createGame(3, 2);
@@ -120,7 +120,6 @@ test('小屏飞行棋选四人、完整结算、再战轮换及按人数读取�
   let die = 6;
   t.mock.method(Math, 'random', () => (die - 0.5) / 6);
   t.mock.timers.enable({apis:['setTimeout']});
-  const flightKey = multiplayerKey('flight', 4);
   const memoryKey = multiplayerKey('memory', 4);
   const memoryRecord = '{"rounds":1,"draws":0,"wins":[0,0,1,0]}';
   const storage = new Map([[memoryKey, memoryRecord]]);
@@ -207,13 +206,16 @@ test('小屏飞行棋选四人、完整结算、再战轮换及按人数读取�
   }
   assert.ok(labels.has('玩家 1获胜！'));
   assert.ok(labels.has('1 号 · 2/2'));
-  assert.deepEqual(writes,[flightKey]);
+  assert.deepEqual(writes,[JOURNAL_KEY]);
+  const [match] = JSON.parse(storage.get(JOURNAL_KEY)).matches;
+  assert.deepEqual(match.players,[null,null,null,null]);
+  assert.deepEqual(match.scores,[2,0,0,0]);
   press('再来一局 · 轮换先手');
   assert.ok(labels.has('轮到玩家 2'));
   press('重新开局（不计战绩）');
   assert.ok(labels.has('轮到玩家 2'));
   press('返回大厅');
-  assert.deepEqual(writes,[flightKey]);
+  assert.deepEqual(writes,[JOURNAL_KEY]);
 
   labels = new Map();
   launch();

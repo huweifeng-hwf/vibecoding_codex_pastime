@@ -25,5 +25,13 @@ start({ canvas, safeTop: (info.safeArea && info.safeArea.top) || 30,
   roomCall: onlineEnv !== '__DUO_'+'CLOUD_ENV__' && typeof wx.cloud?.callFunction === 'function' ? callRoom : null,
   onVisibility: handler => { wx.onShow(() => handler(true)); wx.onHide(() => handler(false)); },
   onResize: handler => wx.onWindowResize(handler),
-  confirm: (message,yes) => { pending=true;wx.showModal({title:'确认操作',content:message,success:r=>{if(r.confirm)yes();},complete:()=>{pending=false;}}); }
+  confirm: (message,yes) => { pending=true;wx.showModal({title:'确认操作',content:message,success:r=>{if(r.confirm)yes();},complete:()=>{pending=false;}}); },
+  prompt: (message, accept) => {
+    pending = true;
+    wx.showModal({
+      title: '新建本机玩家', editable: true, placeholderText: message,
+      success: result => { if (result.confirm) accept(result.content ?? ''); },
+      complete: () => { pending = false; },
+    });
+  },
 });

@@ -13,6 +13,7 @@ const GAMES = [
   { id: 'flight', title: '飞行棋', description: '2–4 人 · 双机快局', start: '开始飞行', rules: Flight },
 ];
 const PLAYER_COUNTS = [2, 3, 4];
+const RECORD_TABS = [['seats','座位统计'],['history','逐局历史'],['friends','好友交手榜'],['profiles','玩家档案']];
 const SEATING_KEY = 'duo.seating.v1';
 const SEAT_COLORS = ['#ffad98', '#80dfd4', '#ffd67d', '#c4b5ff'];
 const FLIGHT_COLORS = ['#ff967e', '#84dbb3', '#ffcf77', '#93baff'];
@@ -29,11 +30,16 @@ function start(platform) {
   let width, height, safeBottom = 0, scene = 'home', game, saved = true, buttons = [];
   let records = Records.load(storage);
   let gomokuRecords = Records.loadGomoku(storage);
+  let journal = Records.loadJournal(storage);
   let first = 'X', gomokuFirst = 'black';
+  let roundPlayers = [null,null], roundFirst = 0, draftPlayers = [];
+  let recordsTab = 'seats', page = 0, selectedMatch, profilePicker, profileMessage = '', rosterBack;
+  const friends = [null,null];
   let activeGame = GAMES[0].id, recordsGame = GAMES[0].id, playerCount = 2, recordsCount = 2;
   const multiplayerRecords = new Map(GAMES.filter(game => game.rules).map(({ id }) => [
     id, new Map(PLAYER_COUNTS.map(count => [count, Records.loadMultiplayer(storage, id, count)])),
   ]));
+  journal.matches.forEach(updateSeatStats);
   const online = platform.roomCall ? createOnline(platform.roomCall, storage, render) : null;
   let roomInput = '';
   let facing = false, seatPrompt = null, rollingFlight = null, movingFlight = null;
@@ -47,18 +53,32 @@ function start(platform) {
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
   function box(x,y,w,h,color) { ctx.fillStyle = color; ctx.fillRect(x,y,w,h); }
-  function button(label,x,y,w,h,action,color = colors.panel) { box(x,y,w,h,color); text(label,x+w/2,y+h/2,17); buttons.push({x,y,w,h,action}); }
+  function button(label,x,y,w,h,action,color = colors.panel,font = 17) { box(x,y,w,h,color); text(label,x+w/2,y+h/2,font); buttons.push({x,y,w,h,action}); }
   const playerNames = { black: '黑方', white: '白方' };
+  const seatIndex = (id,seat) => Records.BOARD_SEATS[id]?.indexOf(seat) ?? seat;
+  const seatName = (id,seat) => id === 'ticTacToe' ? Records.BOARD_SEATS[id][seat] :
+    id === 'gomoku' ? playerNames[Records.BOARD_SEATS[id][seat]] : `${seat+1} 号`;
+  const nickname = id => journal.profiles[id-1];
+  const matchPlayer = (match,seat) => nickname(match.players[seat]) || `游客 ${seatName(match.game,seat)}`;
+  const namedPlayer = seat => nickname(roundPlayers[seatIndex(activeGame,seat)]);
   function newRound() {
-    game = activeGame === 'gomoku' ? Gomoku.createGame(gomokuFirst) : createGame(first);
+    const startingSeat = activeGame === 'gomoku' ? gomokuFirst : first;
+    game = activeGame === 'gomoku' ? Gomoku.createGame(startingSeat) : createGame(startingSeat);
+    roundFirst = seatIndex(activeGame,startingSeat);
     scene = 'game';
     render();
   }
 
-  function openGame(id) {
+  function openGame(id, choosePlayers = false) {
     activeGame = id;
+    playerCount = 2;
+    roundPlayers = [null,null];
+    draftPlayers = roundPlayers.slice();
+    if (choosePlayers) {
+      openRoster('chooseGame');
+      return;
+    }
     if (multiplayerRecords.has(id)) {
-      playerCount = 2;
       scene = 'setup';
       render();
       return;
@@ -70,22 +90,33 @@ function start(platform) {
     const { rules } = GAMES.find(({ id }) => id === activeGame);
     rollingFlight = null;
     movingFlight = null;
+    roundFirst = firstSeat;
     game = rules.createGame(playerCount, firstSeat);
     scene = 'game';
     render();
   }
 
-  function saveMultiplayer() {
-    const recordsByCount = multiplayerRecords.get(activeGame);
-    const stats = Records.recordMultiplayer(recordsByCount.get(playerCount), game);
-    recordsByCount.set(playerCount, stats);
-    saved = Records.save(storage, stats, Records.multiplayerKey(activeGame, playerCount));
+  function updateSeatStats(match) {
+    if (match.game === 'ticTacToe') records = Records.recordSeatMatch(records,match);
+    else if (match.game === 'gomoku') gomokuRecords = Records.recordSeatMatch(gomokuRecords,match);
+    else {
+      const byCount = multiplayerRecords.get(match.game);
+      const count = match.players.length;
+      byCount.set(count,Records.recordSeatMatch(byCount.get(count),match));
+    }
+  }
+
+  function saveMatch() {
+    const match = Records.finishedMatch(activeGame,game,roundPlayers,roundFirst);
+    journal.matches.push(match);
+    updateSeatStats(match);
+    saved = Records.save(storage,journal,Records.JOURNAL_KEY);
   }
 
   function playFlight(next) {
     if (next === game) return;
     game = next;
-    if (game.winner !== null) saveMultiplayer();
+    if (game.winner !== null) saveMatch();
     render();
   }
 
@@ -182,7 +213,7 @@ function start(platform) {
     if (next === game) return;
     game = next;
     if (isMemoryDone(game)) {
-      saveMultiplayer();
+      saveMatch();
     } else if (game.open.length === 2) {
       setTimeout(() => {
         if (scene !== 'game' || game !== next) return;
@@ -197,15 +228,7 @@ function start(platform) {
     const next = activeGame === 'gomoku' ? Gomoku.play(game, index) : play(game, index);
     if (next === game) return;
     game = next;
-    if (game.winner || game.draw) {
-      if (activeGame === 'gomoku') {
-        gomokuRecords = Records.recordGomoku(gomokuRecords, game);
-        saved = Records.save(storage, gomokuRecords, Records.GOMOKU_KEY);
-      } else {
-        records = Records.record(records, game);
-        saved = Records.save(storage, records);
-      }
-    }
+    if (game.winner || game.draw) saveMatch();
     render();
   }
 
@@ -240,7 +263,7 @@ function start(platform) {
     return saved ? '战绩已保存在本机' : '保存失败，本次战绩仅在当前会话有效';
   }
 
-  function drawGameCards(left, top, w) {
+  function drawGameCards(left, top, w, choosePlayers = false) {
     const cardWidth = (w-12)/2;
     GAMES.forEach(({ id, title, description }, i) => {
       const x = left+(i%2)*(cardWidth+12);
@@ -248,7 +271,7 @@ function start(platform) {
       box(x,y,cardWidth,96,colors.panel);
       text(title,x+cardWidth/2,y+32,22);
       text(description,x+cardWidth/2,y+63,13,colors.muted);
-      buttons.push({x,y,w:cardWidth,h:96,action:() => openGame(id)});
+      buttons.push({x,y,w:cardWidth,h:96,action:() => openGame(id,choosePlayers)});
     });
   }
 
@@ -260,10 +283,109 @@ function start(platform) {
     });
   }
 
+  function go(next) {
+    scene = next;
+    render();
+  }
+
+  function openRoster(back) {
+    rosterBack = back;
+    draftPlayers = Array(playerCount).fill(null);
+    go('roster');
+  }
+
+  function startWithPlayers(players) {
+    roundPlayers = players.slice();
+    if (multiplayerRecords.has(activeGame)) startMultiplayer(0);
+    else newRound();
+  }
+
+  function createProfile(onCreated = () => {}) {
+    profileMessage = '';
+    platform.prompt('输入本机玩家昵称（1–8 个字符）', value => {
+      const name = value.trim();
+      if (!name || [...name].length > 8 || /[\u0000-\u001f\u007f]/.test(name)) {
+        profileMessage = '请输入 1–8 个字符的昵称';
+      } else if (journal.profiles.includes(name)) {
+        profileMessage = '这个昵称已存在';
+      } else {
+        const next = { ...journal, profiles: [...journal.profiles,name] };
+        if (Records.save(storage,next,Records.JOURNAL_KEY)) {
+          journal = next;
+          onCreated(next.profiles.length);
+        } else profileMessage = '保存失败，请重试';
+      }
+      render();
+    });
+  }
+
+  function chooseProfile(excluded, onSelect, back, allowGuest = false) {
+    profileMessage = '';
+    profilePicker = { excluded, onSelect, back, allowGuest, page: 0 };
+    go('profilePicker');
+  }
+
+  function pager(cx,left,y,w,index,length,size,select) {
+    const pages = Math.max(1,Math.ceil(length/size));
+    if (pages === 1) return;
+    text(`${index+1} / ${pages}`,cx,y+18,13,colors.muted);
+    if (index > 0) button('上一页',left,y,80,36,() => select(index-1),colors.panel,14);
+    if (index+1 < pages) button('下一页',left+w-80,y,80,36,() => select(index+1),colors.panel,14);
+  }
+
+  function drawRoster(cx,top,left,w) {
+    const { title } = GAMES.find(item => item.id === activeGame);
+    const multiplayer = multiplayerRecords.has(activeGame);
+    text(`${title} · 选择玩家`,cx,top+68,24);
+    if (multiplayer) countButtons(left,top+98,w,playerCount,count => {
+      draftPlayers = Array.from({length:count},(_,i) => draftPlayers[i] ?? null);
+      playerCount = count;
+      render();
+    });
+    draftPlayers.forEach((id,i) => {
+      button(`${seatName(activeGame,i)} · ${nickname(id) || '游客'}`,left,top+156+i*48,w,42,() => {
+        chooseProfile(draftPlayers.filter((_,j) => i !== j), selected => { draftPlayers[i] = selected; }, 'roster', true);
+      });
+    });
+    let previous;
+    for (let i=journal.matches.length-1; i>=0; i--) {
+      const match = journal.matches[i];
+      if (match.game === activeGame && match.players.length === playerCount && match.players.some(id => id !== null)) {
+        previous = match;
+        break;
+      }
+    }
+    if (previous) button('沿用上次玩家',left,top+350,w,40,() => {
+      draftPlayers = previous.players.slice();
+      render();
+    });
+    button('开始对局',left,top+400,w,48,() => startWithPlayers(draftPlayers),'#395a69');
+    button('返回',left,top+460,w,42,() => go(rosterBack));
+  }
+
+  function drawProfilePicker(cx,top,left,w) {
+    const picker = profilePicker;
+    const select = id => {
+      picker.onSelect(id);
+      go(picker.back);
+    };
+    const available = journal.profiles.map((_,i) => i+1).filter(id => !picker.excluded.includes(id));
+    text('选择本机玩家',cx,top+68,25);
+    if (picker.allowGuest) button('使用游客',left,top+105,w,40,() => select(null));
+    available.slice(picker.page*5,picker.page*5+5).forEach((id,i) => {
+      button(nickname(id),left,top+154+i*42,w,37,() => select(id));
+    });
+    if (!available.length) text('还没有可选的玩家档案',cx,top+195,15,colors.muted);
+    pager(cx,left,top+366,w,picker.page,available.length,5,index => { picker.page = index; render(); });
+    text(profileMessage,cx,top+419,13,colors.muted);
+    button('新建玩家',left,top+435,w,44,() => createProfile(select),'#395a69');
+    button('返回',left,top+491,w,42,() => go(picker.back));
+  }
+
   function drawMemory(cx, top, left, w) {
     const done = isMemoryDone(game);
     const title = game.draw ? '配对数并列 · 平局' :
-      done ? `${playerLabel(game.winner)}获胜！` : `轮到${playerLabel(game.turn)}`;
+      done ? `${namedPlayer(game.winner) || playerLabel(game.winner)}获胜！` : `轮到${namedPlayer(game.turn) || playerLabel(game.turn)}`;
     text(title,cx,top+58,26);
     const scoreWidth = w/playerCount;
     game.scores.forEach((score,seat) => {
@@ -301,7 +423,7 @@ function start(platform) {
   function drawFlight(cx, top, left, w) {
     const done = game.winner !== null;
     const activeColor = FLIGHT_COLORS[game.turn];
-    text(done ? `${playerLabel(game.winner)}获胜！` : `轮到${playerLabel(game.turn)}`,cx,top+58,26,activeColor);
+    text(done ? `${namedPlayer(game.winner) || playerLabel(game.winner)}获胜！` : `轮到${namedPlayer(game.turn) || playerLabel(game.turn)}`,cx,top+58,26,activeColor);
     game.planes.forEach((pair,seat) => {
       const arrived = pair.filter(progress => progress === Flight.FINISH).length;
       const tile = w/playerCount;
@@ -517,8 +639,8 @@ function start(platform) {
 
   function drawGomoku(cx, top, left, w) {
     const done = game.winner || game.draw;
-    text(game.draw ? '默契平局！' : game.winner ? playerNames[game.winner]+'获胜！' :
-      playerNames[game.turn]+'落子',cx,top+58,28);
+    text(game.draw ? '默契平局！' : game.winner ? (namedPlayer(game.winner) || playerNames[game.winner])+'获胜！' :
+      (namedPlayer(game.turn) || playerNames[game.turn])+'落子',cx,top+58,28);
     text('横、竖或斜向连成五子及以上获胜',cx,top+89,14,colors.muted);
 
     const by = top+110;
@@ -622,7 +744,7 @@ function start(platform) {
       else render();
     };
     const names = multiplayer ? ['1 号','2 号'] : gomoku ? playerNames : { X: 'X', O: 'O' };
-    const outcome = game.draw ? '平局' : done ? `${names[game.winner]}获胜！` : '';
+    const outcome = game.draw ? '平局' : done ? `${namedPlayer(game.winner) || names[game.winner]}获胜！` : '';
     const controls = seatPrompt
       ? [['取消',() => closePrompt(false)],['确认',() => closePrompt(true)]]
       : [['改为并排',toggleSeating],[done ? '再来一局' : '重开',actions.restart],['回大厅',actions.leave]];
@@ -635,7 +757,7 @@ function start(platform) {
       const titleY = reversed ? top+63 : lower-66;
       const hintY = reversed ? top+89 : lower-92;
       const active = !done && seat === game.turn;
-      const turnLabel = multiplayer ? `${names[seat]}玩家` : `你执 ${names[seat]}`;
+      const turnLabel = namedPlayer(seat) || (multiplayer ? `${names[seat]}玩家` : `你执 ${names[seat]}`);
       const waiting = memory || flight ? '等对方操作' : '等对方落子';
       const title = seatPrompt ? '请确认操作' : outcome || `${turnLabel} · ${active ? '轮到你' : waiting}`;
       let hint = gomoku ? '横竖斜连成五子或以上获胜' : '横竖斜连成三子获胜';
@@ -753,6 +875,149 @@ function start(platform) {
     }
   }
 
+  function dateLabel(timestamp) {
+    const date = new Date(timestamp);
+    const two = value => String(value).padStart(2,'0');
+    return `${date.getFullYear()}-${two(date.getMonth()+1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
+  }
+
+  function outcomeLabel(match) {
+    return match.winner === null ? '平局' : `${matchPlayer(match,match.winner)}获胜`;
+  }
+
+  function drawHistory(matches,cx,top,left,w) {
+    const ordered = matches.slice().reverse();
+    if (!ordered.length) text('暂无逐局记录，完成一局后自动保存',cx,top+252,15,colors.muted);
+    ordered.slice(page*3,page*3+3).forEach((match,i) => {
+      const y = top+210+i*51;
+      box(left,y,w,46,colors.panel);
+      text(`${outcomeLabel(match)} · ${match.players.length} 人 ›`,cx,y+14,16);
+      text(dateLabel(match.endedAt),cx,y+34,12,colors.muted);
+      buttons.push({x:left,y,w,h:46,action:() => { selectedMatch = match; go('matchDetail'); }});
+    });
+    pager(cx,left,top+369,w,page,ordered.length,3,index => { page = index; render(); });
+  }
+
+  function drawMatchDetail(cx,top,left,w) {
+    const match = selectedMatch;
+    text(GAMES.find(item => item.id === match.game).title,cx,top+70,26);
+    text(`${dateLabel(match.endedAt)} · ${match.players.length} 人`,cx,top+106,14,colors.muted);
+    text(outcomeLabel(match),cx,top+145,24);
+    if (match.moves !== undefined) text(`共 ${match.moves} 手`,cx,top+173,13,colors.muted);
+    match.players.forEach((_,i) => {
+      const y = top+195+i*48;
+      const score = match.scores ? ` · ${match.scores[i]} ${match.game === 'memory' ? '对' : '架送达'}` : '';
+      box(left,y,w,42,colors.panel);
+      text(`${seatName(match.game,i)} · ${matchPlayer(match,i)}${i === match.first ? ' · 先手' : ''}${score}`,cx,y+21,14);
+    });
+    button('返回逐局历史',left,top+425,w,46,() => go('records'));
+  }
+
+  function drawFriends(matches,cx,top,left,w) {
+    const half = (w-8)/2;
+    friends.forEach((id,i) => {
+      button(nickname(id) || (i === 0 ? '选好友 A' : '选好友 B'),left+i*(half+8),top+207,half,38,() => {
+        chooseProfile([friends[1-i]], selected => { friends[i] = selected; }, 'records');
+      },colors.panel,15);
+    });
+    if (friends.every(id => id !== null)) {
+      const result = Records.friendResults(matches,...friends);
+      text(`共同完成 ${result.rounds} 局`,cx,top+268,16);
+      text(`${result.aWins} 胜`,left+half/2,top+301,21);
+      text(`${result.bWins} 胜`,left+half*1.5+8,top+301,21);
+      text(`平局 ${result.draws} · 其他玩家获胜 ${result.otherWins}`,cx,top+333,13,colors.muted);
+      button('返回同机胜场榜',left,top+360,w,38,() => {
+        friends.fill(null);
+        page = 0;
+        render();
+      },colors.panel,14);
+      return;
+    }
+    const standings = Records.friendStandings(matches);
+    if (!standings.length) text('至少两名档案玩家同局后上榜',cx,top+288,15,colors.muted);
+    standings.slice(page*3,page*3+3).forEach(({id,wins,rounds},i) => {
+      const rank = standings.findIndex(row => row.wins === wins)+1;
+      text(`${rank}. ${nickname(id)} · ${wins} 胜 / ${rounds} 局`,cx,top+268+i*34,16);
+    });
+    pager(cx,left,top+365,w,page,standings.length,3,index => { page = index; render(); });
+  }
+
+  function drawProfiles(cx,top,left,w) {
+    const profiles = journal.profiles;
+    text('档案只在本机使用，开局可随时选游客',cx,top+110,13,colors.muted);
+    if (!profiles.length) text('还没有玩家档案',cx,top+183,16,colors.muted);
+    profiles.slice(page*4,page*4+4).forEach((name,i) => {
+      const y = top+135+i*45;
+      box(left,y,w,38,colors.panel);
+      text(name,cx,y+19,17,SEAT_COLORS[(page*4+i)%SEAT_COLORS.length]);
+    });
+    pager(cx,left,top+320,w,page,profiles.length,4,index => { page = index; render(); });
+    text(profileMessage,cx,top+363,13,colors.muted);
+    button('新建玩家',left,top+375,w,38,() => createProfile(),'#395a69');
+  }
+
+  function drawSeatStats(cx,top,left,w) {
+    const recordsByCount = multiplayerRecords.get(recordsGame);
+    const stats = recordsByCount ? recordsByCount.get(recordsCount) :
+      recordsGame === 'gomoku' ? gomokuRecords : records;
+    const statsY = recordsByCount ? top+219 : top+175;
+    const summary = `完成 ${stats.rounds} 局`;
+    text(recordsGame === 'flight' ? summary : `${summary} · 平局 ${stats.draws} 局`,cx,statsY,17,colors.muted);
+    if (recordsByCount) {
+      countButtons(left,top+156,w,recordsCount,count => { recordsCount = count; render(); });
+      stats.wins.forEach((wins,seat) => {
+        const y = top+242+seat*43;
+        box(left,y,w,37,colors.panel);
+        text(`${playerLabel(seat)} · ${wins} 胜`,cx,y+18,17,(recordsGame === 'flight' ? FLIGHT_COLORS : SEAT_COLORS)[seat]);
+      });
+    } else if (recordsGame === 'gomoku') {
+      ['black','white'].forEach((player,i) => {
+        const y = top+210+i*95;
+        box(left,y,w,75,colors.panel);
+        text(`${playerNames[player]} · ${stats[player]} 胜`,cx,y+38,23);
+      });
+    } else {
+      ['X','O'].forEach((p,i)=>{ const y=top+210+i*100; box(left,y,w,90,colors.panel); text(`玩家 ${p} · ${stats[p].wins} 胜`,cx,y+27,23,colors[p]); text(`最快获胜：${stats[p].bestMoves === null ? '暂无' : stats[p].bestMoves+' 次落子'}`,cx,y+63,16,colors.muted); });
+    }
+  }
+
+  function drawRecords(cx,top,left,w) {
+    text('本机战绩',cx,top+69,29);
+    if (recordsTab === 'profiles') drawProfiles(cx,top,left,w);
+    else {
+      const tabWidth = (w-16)/GAMES.length;
+      GAMES.forEach(({ id, title },i) => {
+        button(title,left+i*(tabWidth+8),top+105,tabWidth,42,() => {
+          recordsGame = id;
+          page = 0;
+          render();
+        },recordsGame === id ? '#395a69' : colors.panel,15);
+      });
+      if (recordsTab === 'seats') drawSeatStats(cx,top,left,w);
+      else {
+        const count = multiplayerRecords.has(recordsGame) ? recordsCount : 2;
+        if (multiplayerRecords.has(recordsGame)) countButtons(left,top+156,w,count,value => {
+          recordsCount = value;
+          page = 0;
+          render();
+        });
+        const matches = journal.matches.filter(match => match.game === recordsGame && match.players.length === count);
+        if (recordsTab === 'history') drawHistory(matches,cx,top,left,w);
+        else drawFriends(matches,cx,top,left,w);
+      }
+    }
+    const width = (w-12)/RECORD_TABS.length;
+    RECORD_TABS.forEach(([id,label],i) => {
+      button(label,left+i*(width+4),top+423,width,40,() => {
+        recordsTab = id;
+        page = 0;
+        profileMessage = '';
+        render();
+      },recordsTab === id ? '#395a69' : colors.panel,13);
+    });
+    button('返回大厅',left,top+470,w,50,() => go('home'));
+  }
+
   function render() {
     buttons = []; box(0,0,width,height,colors.bg);
     const cx = width/2, top = Math.max(30, platform.safeTop || 0), w = Math.min(width-40,400), left = cx-w/2;
@@ -770,7 +1035,8 @@ function start(platform) {
         render();
       },'#395a69');
       button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
-      text('无需登录 · 战绩仅保存在此设备',cx,top+519,13,colors.muted);
+      button('选玩家开局',left,top+493,w,42,() => go('chooseGame'));
+      text('无需登录 · 战绩仅保存在此设备',cx,top+557,13,colors.muted);
     } else if (scene === 'online' || scene === 'roomCode') {
       drawOnline(cx,top,left,w);
     } else if (scene === 'setup') {
@@ -778,7 +1044,7 @@ function start(platform) {
       text(title,cx,top+76,29);
       text('选择同屏玩家人数',cx,top+123,17,colors.muted);
       countButtons(left,top+150,w,playerCount,count => { playerCount = count; render(); });
-      button(start,left,top+218,w,48,() => startMultiplayer(0),'#395a69');
+      button(start,left,top+218,w,48,() => startWithPlayers(Array(playerCount).fill(null)),'#395a69');
       button('返回大厅',left,top+280,w,46,() => { scene = 'home'; render(); });
       if (activeGame === 'flight') {
         box(left,top+350,w,125,colors.panel);
@@ -788,37 +1054,20 @@ function start(platform) {
         text('−2 乱流退两格 · 最终落点可撞机',cx,top+436,14,colors.muted);
         text('先让两架飞机刚好抵达终点',cx,top+457,14,colors.muted);
       }
+      button('选本机玩家',left,top+(activeGame === 'flight' ? 487 : 339),w,42,() => openRoster('setup'));
+    } else if (scene === 'chooseGame') {
+      text('选玩家开局',cx,top+76,26);
+      text('先选游戏，再给座位选玩家',cx,top+115,15,colors.muted);
+      drawGameCards(left,top,w,true);
+      button('返回大厅',left,top+434,w,50,() => go('home'));
+    } else if (scene === 'roster') {
+      drawRoster(cx,top,left,w);
+    } else if (scene === 'profilePicker') {
+      drawProfilePicker(cx,top,left,w);
+    } else if (scene === 'matchDetail') {
+      drawMatchDetail(cx,top,left,w);
     } else if (scene === 'records') {
-      text('本机战绩',cx,top+69,29);
-      const tabWidth = (w-16)/GAMES.length;
-      GAMES.forEach(({ id, title },i) => {
-        button(title,left+i*(tabWidth+8),top+105,tabWidth,42,() => { recordsGame = id; render(); },
-          recordsGame === id ? '#395a69' : colors.panel);
-      });
-      const recordsByCount = multiplayerRecords.get(recordsGame);
-      const stats = recordsByCount ? recordsByCount.get(recordsCount) :
-        recordsGame === 'gomoku' ? gomokuRecords : records;
-      const statsY = recordsByCount ? top+219 : top+175;
-      const summary = `完成 ${stats.rounds} 局`;
-      text(recordsGame === 'flight' ? summary : `${summary} · 平局 ${stats.draws} 局`,cx,statsY,17,colors.muted);
-      if (recordsByCount) {
-        countButtons(left,top+156,w,recordsCount,count => { recordsCount = count; render(); });
-        stats.wins.forEach((wins,seat) => {
-          const y = top+242+seat*43;
-          box(left,y,w,37,colors.panel);
-          text(`${playerLabel(seat)} · ${wins} 胜`,cx,y+18,17,(recordsGame === 'flight' ? FLIGHT_COLORS : SEAT_COLORS)[seat]);
-        });
-      } else if (recordsGame === 'gomoku') {
-        ['black','white'].forEach((player,i) => {
-          const y = top+210+i*95;
-          box(left,y,w,75,colors.panel);
-          text(`${playerNames[player]} · ${stats[player]} 胜`,cx,y+38,23);
-        });
-      } else {
-        ['X','O'].forEach((p,i)=>{ const y=top+210+i*100; box(left,y,w,90,colors.panel); text(`玩家 ${p} · ${stats[p].wins} 胜`,cx,y+27,23,colors[p]); text(`最快获胜：${stats[p].bestMoves === null ? '暂无' : stats[p].bestMoves+' 次落子'}`,cx,y+63,16,colors.muted); });
-      }
-      text('胜场按本机座位记录',cx,top+437,13,colors.muted);
-      button('返回大厅',left,top+470,w,50,()=>{scene='home';render();});
+      drawRecords(cx,top,left,w);
     } else if (activeGame === 'flight') {
       drawFlight(cx,top,left,w);
     } else if (activeGame === 'memory') {
@@ -827,7 +1076,7 @@ function start(platform) {
       drawGomoku(cx,top,left,w);
     } else {
       const done = game.winner || game.draw;
-      text(done ? (game.draw ? '默契平局！' : `玩家 ${game.winner} 获胜！`) : `轮到玩家 ${game.turn}`,cx,top+68,28,game.winner ? colors[game.winner] : colors.ink);
+      text(done ? (game.draw ? '默契平局！' : `${namedPlayer(game.winner) || '玩家 '+game.winner} 获胜！`) : `轮到${namedPlayer(game.turn) || '玩家 '+game.turn}`,cx,top+68,28,game.winner ? colors[game.winner] : colors.ink);
       text('先连成横、竖或斜向三子即获胜',cx,top+106,14,colors.muted);
       const size = Math.min(w, height-top-330), by = top+140;
       drawTicBoard(game,cx,by,size,done ? null : commitMove);
