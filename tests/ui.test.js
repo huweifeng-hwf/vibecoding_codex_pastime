@@ -66,3 +66,75 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
   assert.ok(labels.includes('黑方 · 1 胜'));
   assert.ok(labels.includes('白方 · 0 胜'));
 });
+
+test('面对面布局保持棋盘坐标，两端可操作并共用战绩', () => {
+  const storage = new Map();
+  let labels, tap, reversed = false, anchor;
+  let writes = 0;
+  const canvas = { getContext: () => ({
+    fillRect() {}, setTransform() {}, save() {},
+    translate(x,y) { anchor = {x,y}; },
+    rotate(angle) { assert.equal(angle,Math.PI); reversed = true; },
+    restore() { reversed = false; },
+    fillText(label,x,y) { labels.push({ label, reversed, ...(reversed ? anchor : {x,y}) }); },
+  }) };
+  function launch() {
+    labels = [];
+    start({
+      canvas, size: () => ({width:320,height:650,dpr:2,safeBottom:34}),
+      storage: {
+        get: key => storage.get(key),
+        set: (key,value) => {
+          storage.set(key,value);
+          if (key === 'duo.records.v1') writes++;
+        },
+      },
+      onTap: handler => { tap = (x,y) => { labels = []; handler(x,y); }; },
+      onResize() {}, confirm: () => assert.fail('面对面使用双向确认面板'),
+    });
+  }
+  const find = (label, direction = false) => {
+    const match = labels.find(item => item.label === label && item.reversed === direction);
+    assert.ok(match, label);
+    return match;
+  };
+  const press = (label,direction) => {
+    const {x,y} = find(label,direction);
+    tap(x,y);
+  };
+
+  launch();
+  press('井字棋');
+  tap(67,217);
+  press('座位：并排 · 切换面对面');
+  find('你执 O · 轮到你',true);
+  find('你执 X · 等对方落子');
+  const stone = find('✕');
+  press('回大厅',true);
+  find('请确认操作',true);
+  press('取消',true);
+  assert.deepEqual(find('✕'),stone);
+  tap(stone.x,stone.y+93);
+  find('你执 X · 轮到你');
+  assert.deepEqual(find('✕'),stone);
+  tap(stone.x+93,stone.y);
+  tap(stone.x+93,stone.y+93);
+  tap(stone.x+186,stone.y);
+  find('X获胜！',true);
+  find('X获胜！');
+  assert.equal(writes,1);
+  press('再来一局',true);
+  find('你执 O · 轮到你',true);
+  press('改为并排',true);
+  find('轮到玩家 O');
+  assert.equal(writes,1);
+
+  launch();
+  press('井字棋');
+  find('座位：并排 · 切换面对面');
+  press('座位：并排 · 切换面对面');
+  launch();
+  press('井字棋');
+  find('你执 O · 等对方落子',true);
+  assert.equal(JSON.parse(storage.get('duo.records.v1')).X.wins,1);
+});
