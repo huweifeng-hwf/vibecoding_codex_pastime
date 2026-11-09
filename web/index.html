@@ -1,2 +1,27 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"><title>一起玩 · 双人互动小游戏大全</title><style>html,body{margin:0;height:100%;background:#0b0e1b;display:grid;place-items:center}canvas{width:min(100vw,460px);height:100dvh;touch-action:none;display:block}</style></head><body><canvas id="game" aria-label="双人小游戏画布"></canvas><script src="game.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>一起玩 · 双人互动小游戏大全</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #11152a; }
+    body {
+      box-sizing: border-box;
+      display: grid;
+      grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+      place-items: center;
+      padding:
+        var(--safe-area-inset-top, env(safe-area-inset-top))
+        var(--safe-area-inset-right, env(safe-area-inset-right))
+        var(--safe-area-inset-bottom, env(safe-area-inset-bottom))
+        var(--safe-area-inset-left, env(safe-area-inset-left));
+    }
+    canvas { width: min(100%, 460px); height: 100%; touch-action: none; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="game" aria-label="双人小游戏画布"></canvas>
+  <script src="game.js"></script>
+</body>
+</html>
