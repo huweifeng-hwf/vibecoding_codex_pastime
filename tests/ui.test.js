@@ -1,7 +1,7 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const {start}=require('../src/app');
 function fixture(){let tap,resize,data,fail=false;const labels=[];const ctx={fillRect(){},setTransform(){},fillText(t){labels.push(t);}};const canvas={getContext:()=>ctx};start({canvas,size:()=>({width:390,height:844,dpr:2}),storage:{get:()=>data,set:(k,v)=>{if(fail)throw Error();data=v;}},onTap:f=>tap=f,onResize:f=>resize=f,confirm:(m,yes)=>yes()});return {labels,tap:(x,y)=>tap(x,y),resize:()=>resize(),get data(){return JSON.parse(data);},fail:()=>fail=true};}
-test('大厅到获胜、重复点击只记一次、重开与战绩页',()=>{const f=fixture();f.tap(195,275);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.equal(f.data.rounds,1);assert.equal(f.data.X.wins,1);f.tap(312,228);assert.equal(f.data.rounds,1);f.resize();assert.equal(f.data.rounds,1);assert.ok(f.labels.includes('玩家 X 获胜！'));f.tap(195,650);f.tap(195,490);assert.ok(f.labels.includes('玩家 X · 1 胜'));});
-test('存储失败仍能结算并显示提示',()=>{const f=fixture();f.fail();f.tap(195,275);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.ok(f.labels.some(t=>t.includes('保存失败')));});
+test('大厅到获胜、重复点击只记一次、重开与战绩页',()=>{const f=fixture();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.equal(f.data.rounds,1);assert.equal(f.data.X.wins,1);f.tap(312,228);assert.equal(f.data.rounds,1);f.resize();assert.equal(f.data.rounds,1);assert.ok(f.labels.includes('玩家 X 获胜！'));f.tap(195,650);f.tap(195,490);assert.ok(f.labels.includes('玩家 X · 1 胜'));});
+test('存储失败仍能结算并显示提示',()=>{const f=fixture();f.fail();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.ok(f.labels.some(t=>t.includes('保存失败')));});
 
 test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () => {
   const { KEY, GOMOKU_KEY } = require('../src/records');
@@ -30,7 +30,7 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
     onResize() {},
     confirm: (_, yes) => { accept = yes; },
   });
-  tap(160, 410);
+  tap(235, 228);
   assert.ok(labels.includes('黑方落子'));
   assert.ok(labels.includes('轻点空交叉点落子'));
   tap(289, 409);
@@ -62,7 +62,7 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
   accept();
   tap(160, 489);
   assert.ok(labels.includes('最快获胜：3 次落子'));
-  tap(235, 155);
+  tap(160, 155);
   assert.ok(labels.includes('黑方 · 1 胜'));
   assert.ok(labels.includes('白方 · 0 胜'));
 });
