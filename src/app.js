@@ -31,7 +31,6 @@ function start(platform) {
   let records = Records.load(storage);
   let gomokuRecords = Records.loadGomoku(storage);
   let journal = Records.loadJournal(storage);
-  let first = 'X', gomokuFirst = 'black';
   let roundPlayers = [null,null], roundFirst = 0, draftPlayers = [];
   let recordsTab = 'seats', page = 0, selectedMatch, profilePicker, profileMessage = '', rosterBack;
   const friends = [null,null];
@@ -61,10 +60,10 @@ function start(platform) {
   const nickname = id => journal.profiles[id-1];
   const matchPlayer = (match,seat) => nickname(match.players[seat]) || `游客 ${seatName(match.game,seat)}`;
   const namedPlayer = seat => nickname(roundPlayers[seatIndex(activeGame,seat)]);
-  function newRound() {
-    const startingSeat = activeGame === 'gomoku' ? gomokuFirst : first;
+  function newRound(firstSeat = 0) {
+    const startingSeat = Records.BOARD_SEATS[activeGame][firstSeat];
     game = activeGame === 'gomoku' ? Gomoku.createGame(startingSeat) : createGame(startingSeat);
-    roundFirst = seatIndex(activeGame,startingSeat);
+    roundFirst = firstSeat;
     scene = 'game';
     render();
   }
@@ -238,12 +237,7 @@ function start(platform) {
         startMultiplayer(done ? (game.first + 1) % playerCount : game.first);
         return;
       }
-      if (activeGame === 'gomoku') {
-        if (done) gomokuFirst = Gomoku.other(gomokuFirst);
-      } else {
-        first = first === 'X' ? 'O' : 'X';
-      }
-      newRound();
+      newRound(done ? 1-roundFirst : roundFirst);
     };
     const leave = () => { scene = 'home'; render(); };
     return {
