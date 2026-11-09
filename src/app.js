@@ -1,16 +1,140 @@
 'use strict';
 const { createGame, play } = require('./game');
+const Gomoku = require('./gomoku');
 const Records = require('./records');
 function start(platform) {
   const { canvas, storage } = platform;
   const ctx = canvas.getContext('2d');
   let scale = 1;
-  let width, height, scene = 'home', game, records = Records.load(storage), first = 'X', saved = true, buttons = [], locked = false;
+  let width, height, safeBottom = 0, scene = 'home', game, saved = true, buttons = [];
+  let records = Records.load(storage);
+  let gomokuRecords = Records.loadGomoku(storage);
+  let first = 'X', gomokuFirst = 'black', selected = null;
+  let playingGomoku = false, showingGomokuRecords = false;
   const colors = { bg: '#11152a', panel: '#202640', ink: '#f5f1e9', muted: '#aab2cc', X: '#ffad98', O: '#80dfd4' };
   function text(value, x, y, size = 18, color = colors.ink) { ctx.fillStyle = color; ctx.font = `${size >= 25 ? 'bold ' : ''}${size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(value, x, y); }
   function box(x,y,w,h,color) { ctx.fillStyle = color; ctx.fillRect(x,y,w,h); }
   function button(label,x,y,w,h,action,color = colors.panel) { box(x,y,w,h,color); text(label,x+w/2,y+h/2,17); buttons.push({x,y,w,h,action}); }
-  function newRound() { game = createGame(first); scene = 'game'; locked = false; render(); }
+  const playerNames = { black: '黑方', white: '白方' };
+  function newRound() {
+    game = playingGomoku ? Gomoku.createGame(gomokuFirst) : createGame(first);
+    selected = null;
+    scene = 'game';
+    render();
+  }
+
+  function openGame(gomoku) {
+    playingGomoku = gomoku;
+    newRound();
+  }
+
+  function commitMove(index) {
+    const next = playingGomoku ? Gomoku.play(game, index) : play(game, index);
+    if (next === game) return;
+    game = next;
+    selected = null;
+    if (game.winner || game.draw) {
+      if (playingGomoku) {
+        gomokuRecords = Records.recordGomoku(gomokuRecords, game);
+        saved = Records.save(storage, gomokuRecords, Records.GOMOKU_KEY);
+      } else {
+        records = Records.record(records, game);
+        saved = Records.save(storage, records);
+      }
+    }
+    render();
+  }
+
+  function roundControls(done, left, y, w) {
+    const restart = () => {
+      if (playingGomoku) {
+        if (done) gomokuFirst = Gomoku.other(gomokuFirst);
+      } else {
+        first = first === 'X' ? 'O' : 'X';
+      }
+      newRound();
+    };
+    button(done ? '再来一局 · 交换先手' : '重新开局（不计战绩）', left,y,w,48,() => {
+      if (done) restart();
+      else platform.confirm('重新开局？未完成的对局不计入战绩。', restart);
+    });
+    button('返回大厅',left,y+61,w,46,() => {
+      const go = () => { scene = 'home'; render(); };
+      if (done) go();
+      else platform.confirm('离开本局？未完成的对局不计入战绩。', go);
+    });
+  }
+
+  function saveStatus() {
+    return saved ? '战绩已保存在本机' : '保存失败，本次战绩仅在当前会话有效';
+  }
+
+  function gameCard(title, description, left, y, w, action) {
+    box(left,y,w,114,colors.panel);
+    text(title,left+w/2,y+27,24);
+    text(description,left+w/2,y+57,15,colors.muted);
+    button('开始对战',left,y+74,w,40,action,'#395a69');
+  }
+
+  function drawGomoku(cx, top, left, w) {
+    const { SIZE } = Gomoku;
+    const done = game.winner || game.draw;
+    text(game.draw ? '默契平局！' : game.winner ? playerNames[game.winner]+'获胜！' :
+      playerNames[game.turn]+'落子',cx,top+58,28);
+    text('横、竖或斜向连成五子及以上获胜',cx,top+89,14,colors.muted);
+
+    const by = top+110;
+    const size = Math.min(w, height-safeBottom-by-192);
+    const bx = cx-size/2;
+    const step = size/SIZE;
+    const inset = step/2;
+    const grid = size-step;
+    box(bx,by,size,size,'#d5a66d');
+    for (let i=0; i<SIZE; i++) {
+      const offset = inset+i*step;
+      box(bx+offset,by+inset,1,grid,'#694a32');
+      box(bx+inset,by+offset,grid,1,'#694a32');
+    }
+
+    for (let i=0; i<game.board.length; i++) {
+      const x = bx+(i%SIZE)*step;
+      const y = by+Math.floor(i/SIZE)*step;
+      const stone = game.board[i];
+      if (stone || i === selected) {
+        const color = (stone || game.turn) === 'black' ? '#1f2026' : '#fff5de';
+        ctx.globalAlpha = stone ? 1 : 0.55;
+        ctx.beginPath();
+        ctx.arc(x+inset,y+inset,step*0.41,0,Math.PI*2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        if (game.line.includes(i) || i === game.last) {
+          const mark = game.line.includes(i) ? '#ef7963' : '#589fcb';
+          box(x+inset-2,y+inset-2,4,4,mark);
+        }
+      }
+    }
+
+    if (!done) {
+      buttons.push({x:bx,y:by,w:size,h:size,action:(x,y) => {
+        const index = Math.floor((y-by)/step)*SIZE + Math.floor((x-bx)/step);
+        if (game.board[index] !== null) return;
+        selected = index;
+        render();
+      }});
+    }
+
+    const y = by+size+12;
+    if (done) {
+      text(saveStatus(),cx,y+20,13,colors.muted);
+    } else if (selected === null) {
+      box(left,y,w,42,colors.panel);
+      text('轻点空交叉点选位',cx,y+21,15,colors.muted);
+    } else {
+      button('确认落子',left,y,w,42,() => commitMove(selected),'#395a69');
+    }
+    roundControls(done,left,y+54,w);
+  }
   function render() {
     buttons = []; box(0,0,width,height,colors.bg);
     const cx = width/2, top = Math.max(30, platform.safeTop || 0), w = Math.min(width-40,400), left = cx-w/2;
@@ -18,19 +142,32 @@ function start(platform) {
     if (scene === 'home') {
       text('双人互动小游戏大全',cx,top+76,26);
       text('一块屏幕，两个人，一点胜负欲。',cx,top+115,15,colors.muted);
-      box(left,top+155,w,190,colors.panel);
-      text('✕  /  ○',cx,top+201,40,colors.X);
-      text('井字棋',cx,top+251,27); text('同屏对战 · 轮流落子 · 约 1 分钟',cx,top+289,15,colors.muted);
-      button('开始双人对战',left,top+365,w,54,newRound,'#395a69');
-      button('本机最佳战绩',left,top+434,w,50,()=>{scene='records';render();});
-      text('更多游戏与好友联机，后续开放',cx,top+519,14,colors.muted);
-      text('无需登录 · 战绩仅保存在此设备',cx,Math.min(height-25,top+555),13,colors.muted);
+      gameCard('井字棋','双人同屏 · 约 1 分钟',left,top+150,w,() => openGame(false));
+      gameCard('五子棋','双人同屏 · 轮流落子',left,top+285,w,() => openGame(true));
+      button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
+      text('无需登录 · 战绩仅保存在此设备',cx,top+519,13,colors.muted);
     } else if (scene === 'records') {
-      text('本机战绩',cx,top+75,29);
-      text(`完成 ${records.rounds} 局 · 平局 ${records.draws} 局`,cx,top+124,17,colors.muted);
-      ['X','O'].forEach((p,i)=>{ const y=top+175+i*120; box(left,y,w,100,colors.panel); text(`玩家 ${p} · ${records[p].wins} 胜`,cx,y+30,23,colors[p]); text(`最快获胜：${records[p].bestMoves === null ? '暂无' : records[p].bestMoves+' 次落子'}`,cx,y+69,16,colors.muted); });
-      text('玩家 X / O 代表座位，不代表微信身份。',cx,top+437,13,colors.muted);
+      text('本机战绩',cx,top+69,29);
+      const tabWidth = (w-10)/2;
+      button('井字棋',left,top+105,tabWidth,42,() => {showingGomokuRecords=false;render();},
+        showingGomokuRecords ? colors.panel : '#395a69');
+      button('五子棋',left+tabWidth+10,top+105,tabWidth,42,() => {showingGomokuRecords=true;render();},
+        showingGomokuRecords ? '#395a69' : colors.panel);
+      const stats = showingGomokuRecords ? gomokuRecords : records;
+      text(`完成 ${stats.rounds} 局 · 平局 ${stats.draws} 局`,cx,top+175,17,colors.muted);
+      if (showingGomokuRecords) {
+        ['black','white'].forEach((player,i) => {
+          const y = top+210+i*95;
+          box(left,y,w,75,colors.panel);
+          text(`${playerNames[player]} · ${stats[player]} 胜`,cx,y+38,23);
+        });
+      } else {
+        ['X','O'].forEach((p,i)=>{ const y=top+210+i*100; box(left,y,w,90,colors.panel); text(`玩家 ${p} · ${stats[p].wins} 胜`,cx,y+27,23,colors[p]); text(`最快获胜：${stats[p].bestMoves === null ? '暂无' : stats[p].bestMoves+' 次落子'}`,cx,y+63,16,colors.muted); });
+      }
+      text('胜场按本机座位记录',cx,top+437,13,colors.muted);
       button('返回大厅',left,top+470,w,50,()=>{scene='home';render();});
+    } else if (playingGomoku) {
+      drawGomoku(cx,top,left,w);
     } else {
       const done = game.winner || game.draw;
       text(done ? (game.draw ? '默契平局！' : `玩家 ${game.winner} 获胜！`) : `轮到玩家 ${game.turn}`,cx,top+68,28,game.winner ? colors[game.winner] : colors.ink);
@@ -40,21 +177,15 @@ function start(platform) {
         const x=bx+(i%3)*cell,y=by+Math.floor(i/3)*cell;
         box(x+3,y+3,cell-6,cell-6,game.line.includes(i)?'#3d5064':colors.panel);
         if(game.board[i]) text(game.board[i] === 'X' ? '✕' : '○',x+cell/2,y+cell/2,cell*0.55,colors[game.board[i]]);
-        buttons.push({x,y,w:cell,h:cell,action:()=>{
-          if(locked) return;
-          const next = play(game,i); if(next === game) return; game=next;
-          if(game.winner || game.draw) { locked=true; records=Records.record(records,game); saved=Records.save(storage,records); }
-          render();
-        }});
+        buttons.push({x,y,w:cell,h:cell,action:()=>commitMove(i)});
       }
       const y=by+size+20;
-      text(done ? (saved ? '战绩已保存在本机' : '保存失败，本次战绩仅在当前会话有效') : `玩家 X（暖橙） vs 玩家 O（薄荷）`,cx,y,13,colors.muted);
-      button(done?'再来一局 · 交换先手':'重新开局（不计战绩）',left,y+28,w,48,()=>{const go=()=>{first=first==='X'?'O':'X';newRound();};if(done)go();else platform.confirm('重新开局？未完成的对局不计入战绩。',go);});
-      button('返回大厅',left,y+89,w,46,()=>{const go=()=>{scene='home';render();};if(done)go();else platform.confirm('离开本局？未完成的对局不计入战绩。',go);});
+      text(done ? saveStatus() : '玩家 X（暖橙） vs 玩家 O（薄荷）',cx,y,13,colors.muted);
+      roundControls(done,left,y+28,w);
     }
   }
-  function resize() { const info=platform.size(); scale=Math.min(1,info.height/650);width=info.width/scale; height=info.height/scale; const dpr=info.dpr||1; canvas.width=Math.round(info.width*dpr);canvas.height=Math.round(info.height*dpr);ctx.setTransform(dpr*scale,0,0,dpr*scale,0,0);render(); }
-  platform.onTap((x,y)=>{x/=scale;y/=scale;const hit=buttons.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);if(hit)hit.action();});
+  function resize() { const info=platform.size(); scale=Math.min(1,info.height/650);width=info.width/scale; height=info.height/scale; safeBottom=(info.safeBottom || 0)/scale; const dpr=info.dpr||1; canvas.width=Math.round(info.width*dpr);canvas.height=Math.round(info.height*dpr);ctx.setTransform(dpr*scale,0,0,dpr*scale,0,0);render(); }
+  platform.onTap((x,y)=>{x/=scale;y/=scale;const hit=buttons.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);if(hit)hit.action(x,y);});
   platform.onResize(resize); resize();
 }
 module.exports = { start };

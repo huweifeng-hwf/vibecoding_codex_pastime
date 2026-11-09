@@ -1,5 +1,6 @@
 'use strict';
 const KEY = 'duo.records.v1';
+const GOMOKU_KEY = 'duo.gomoku.records.v1';
 const empty = () => ({ version: 1, rounds: 0, draws: 0, X: { wins: 0, bestMoves: null }, O: { wins: 0, bestMoves: null } });
 function valid(value) {
   return value && value.version === 1 && Number.isSafeInteger(value.rounds) && value.rounds >= 0 &&
@@ -8,8 +9,25 @@ function valid(value) {
       (value[p].bestMoves === null || (Number.isInteger(value[p].bestMoves) && value[p].bestMoves >= 3 && value[p].bestMoves <= 5))) &&
     value.draws + value.X.wins + value.O.wins === value.rounds;
 }
-function load(storage) {
-  try { const value = JSON.parse(storage.get(KEY) || 'null'); return valid(value) ? value : empty(); } catch { return empty(); }
+function read(storage, key, validate, fallback) {
+  try {
+    const value = JSON.parse(storage.get(key) || 'null');
+    return validate(value) ? value : fallback();
+  } catch { return fallback(); }
+}
+function load(storage) { return read(storage, KEY, valid, empty); }
+
+const emptyGomoku = () => ({ rounds: 0, draws: 0, black: 0, white: 0 });
+function loadGomoku(storage) {
+  return read(storage, GOMOKU_KEY, value => value &&
+    ['rounds', 'draws', 'black', 'white'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0) &&
+    value.rounds === value.draws + value.black + value.white, emptyGomoku);
+}
+
+function recordGomoku(records, game) {
+  if (!game.winner && !game.draw) return records;
+  const outcome = game.winner || 'draws';
+  return { ...records, rounds: records.rounds + 1, [outcome]: records[outcome] + 1 };
 }
 function record(records, game) {
   if (!game.winner && !game.draw) return records;
@@ -18,5 +36,5 @@ function record(records, game) {
   else { const p = next[game.winner]; p.wins++; const moves = game.board.filter(v => v === game.winner).length; p.bestMoves = p.bestMoves === null ? moves : Math.min(p.bestMoves, moves); }
   return next;
 }
-function save(storage, records) { try { storage.set(KEY, JSON.stringify(records)); return true; } catch { return false; } }
-module.exports = { KEY, empty, load, record, save };
+function save(storage, records, key = KEY) { try { storage.set(key, JSON.stringify(records)); return true; } catch { return false; } }
+module.exports = { KEY, GOMOKU_KEY, empty, load, loadGomoku, record, recordGomoku, save };
