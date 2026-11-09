@@ -60,6 +60,10 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
   assert.ok(labels.includes('白方落子'));
   tap(160, 550);
   accept();
+  tap(235, 228);
+  assert.ok(labels.includes('黑方落子'));
+  tap(160, 550);
+  accept();
   tap(160, 489);
   assert.ok(labels.includes('最快获胜：3 次落子'));
   tap(125, 155);
@@ -129,6 +133,15 @@ test('面对面布局保持棋盘坐标，两端可操作并共用战绩', () =>
   find('轮到玩家 O');
   assert.equal(writes,1);
 
+  press('座位：并排 · 切换面对面');
+  press('重开',true);
+  press('确认',true);
+  find('你执 O · 轮到你',true);
+  press('回大厅',true);
+  press('确认',true);
+  press('井字棋');
+  find('你执 X · 轮到你');
+  press('改为并排',true);
   launch();
   press('井字棋');
   find('座位：并排 · 切换面对面');
