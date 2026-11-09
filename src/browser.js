@@ -1,6 +1,12 @@
 const { start } = require('./app');
 const canvas=document.getElementById('game');
-start({canvas,storage:{get:k=>localStorage.getItem(k),set:(k,v)=>localStorage.setItem(k,v)},
+const storage = window.DuoRecords ?? localStorage;
+start({canvas,storage:{
+  get: key => storage.getItem(key),
+  set: (key,value) => {
+    if (storage.setItem(key,value) === false) throw new Error('Unable to save local records');
+  },
+},
   size:()=>({width:canvas.clientWidth,height:canvas.clientHeight,dpr:devicePixelRatio}),
   onTap:fn=>canvas.addEventListener('pointerdown',e=>{if(!e.isPrimary)return;const r=canvas.getBoundingClientRect();fn(e.clientX-r.left,e.clientY-r.top);}),
-  onResize:fn=>window.addEventListener('resize',fn),confirm:(message,yes)=>{if(window.confirm(message))yes();}});
+  onResize:fn=>new ResizeObserver(fn).observe(canvas),confirm:(message,yes)=>{if(window.confirm(message))yes();}});
