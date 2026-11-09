@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const Memory = require('../src/memory');
 const { start } = require('../src/app');
-const { KEY, GOMOKU_KEY, multiplayerKey, recordMultiplayer } = require('../src/records');
+const { KEY, GOMOKU_KEY, JOURNAL_KEY, recordMultiplayer } = require('../src/records');
 
 const keepOrder = () => 0.999;
 
@@ -106,7 +106,7 @@ test('小屏从大厅完成四人对局并再战，按人数保存和重新读�
   assert.ok(ui.has('玩家 2获胜！'));
   assert.ok(ui.has('2 号 · 8 对'));
   flip(0);
-  assert.deepEqual(writes,[multiplayerKey('memory', 4)]);
+  assert.deepEqual(writes,[JOURNAL_KEY]);
   ui.press('再来一局 · 轮换先手');
   assert.ok(ui.has('轮到玩家 2'));
   assert.equal(ui.cards().length,16);
@@ -127,7 +127,7 @@ test('小屏从大厅完成四人对局并再战，按人数保存和重新读�
   ui.press('开始配对');
   assert.ok(ui.has('2 号 · 0 对'));
   assert.equal(ui.has('3 号 · 0 对'),false);
-  assert.deepEqual(writes,[multiplayerKey('memory', 4)]);
+  assert.deepEqual(writes,[JOURNAL_KEY]);
 
   const reopened = fixture(storage,writes);
   reopened.press('本机战绩');

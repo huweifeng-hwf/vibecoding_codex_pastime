@@ -1,10 +1,10 @@
-const {test}=require('node:test');const assert=require('node:assert/strict');const {start}=require('../src/app');
+const {test}=require('node:test');const assert=require('node:assert/strict');const {start}=require('../src/app');const {JOURNAL_KEY}=require('../src/records');
 function fixture(){let tap,resize,data,fail=false;const labels=[];const ctx={fillRect(){},setTransform(){},fillText(t){labels.push(t);}};const canvas={getContext:()=>ctx};start({canvas,size:()=>({width:390,height:844,dpr:2}),storage:{get:()=>data,set:(k,v)=>{if(fail)throw Error();data=v;}},onTap:f=>tap=f,onResize:f=>resize=f,confirm:(m,yes)=>yes()});return {labels,tap:(x,y)=>tap(x,y),resize:()=>resize(),get data(){return JSON.parse(data);},fail:()=>fail=true};}
-test('大厅到获胜、重复点击只记一次、重开与战绩页',()=>{const f=fixture();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.equal(f.data.rounds,1);assert.equal(f.data.X.wins,1);f.tap(312,228);assert.equal(f.data.rounds,1);f.resize();assert.equal(f.data.rounds,1);assert.ok(f.labels.includes('玩家 X 获胜！'));f.tap(195,650);f.tap(195,490);assert.ok(f.labels.includes('玩家 X · 1 胜'));});
+test('大厅到获胜、重复点击只记一次、重开与战绩页',()=>{const f=fixture();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.equal(f.data.matches.length,1);assert.equal(f.data.matches[0].winner,0);f.tap(312,228);assert.equal(f.data.matches.length,1);f.resize();assert.equal(f.data.matches.length,1);assert.ok(f.labels.includes('玩家 X 获胜！'));f.tap(195,650);f.tap(195,490);assert.ok(f.labels.includes('玩家 X · 1 胜'));});
 test('存储失败仍能结算并显示提示',()=>{const f=fixture();f.fail();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.ok(f.labels.some(t=>t.includes('保存失败')));});
 
 test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () => {
-  const { KEY, GOMOKU_KEY } = require('../src/records');
+  const { KEY } = require('../src/records');
   const legacy = JSON.stringify({
     version: 1, rounds: 1, draws: 0,
     X: { wins: 1, bestMoves: 3 }, O: { wins: 0, bestMoves: null },
@@ -49,8 +49,8 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
   }
   assert.ok(labels.includes('黑方获胜！'));
   tap(31, 151);
-  assert.deepEqual(writes, [GOMOKU_KEY]);
-  assert.deepEqual(JSON.parse(storage.get(GOMOKU_KEY)), { rounds: 1, draws: 0, black: 1, white: 0 });
+  assert.deepEqual(writes, [JOURNAL_KEY]);
+  assert.equal(JSON.parse(storage.get(JOURNAL_KEY)).matches[0].game, 'gomoku');
   assert.equal(storage.get(KEY), legacy);
 
   tap(160, 509);
@@ -86,7 +86,7 @@ test('面对面布局保持棋盘坐标，两端可操作并共用战绩', () =>
         get: key => storage.get(key),
         set: (key,value) => {
           storage.set(key,value);
-          if (key === 'duo.records.v1') writes++;
+          if (key === JOURNAL_KEY) writes++;
         },
       },
       onTap: handler => { tap = (x,y) => { labels = []; handler(x,y); }; },
@@ -136,5 +136,84 @@ test('面对面布局保持棋盘坐标，两端可操作并共用战绩', () =>
   launch();
   press('井字棋');
   find('你执 O · 等对方落子',true);
-  assert.equal(JSON.parse(storage.get('duo.records.v1')).X.wins,1);
+  assert.equal(JSON.parse(storage.get(JOURNAL_KEY)).matches[0].winner,0);
+});
+
+test('本机档案换座后按人计算交手榜，重启保留历史和旧座位战绩', () => {
+  const { KEY } = require('../src/records');
+  const legacy = JSON.stringify({
+    version: 1, rounds: 1, draws: 0,
+    X: { wins: 1, bestMoves: 3 }, O: { wins: 0, bestMoves: null },
+  });
+  const storage = new Map([[KEY,legacy]]);
+  let labels, tap, prompt;
+  function launch() {
+    labels = new Map();
+    start({
+      canvas: { getContext: () => ({
+        fillRect() {}, setTransform() {},
+        fillText(label,x,y) { labels.set(label,[x,y]); },
+      }) },
+      size: () => ({ width: 390, height: 844, dpr: 2 }),
+      storage: { get: key => storage.get(key), set: (key,value) => storage.set(key,value) },
+      onTap: handler => { tap = (x,y) => { labels.clear(); handler(x,y); }; },
+      onResize() {},
+      prompt: (_,accept) => { prompt = value => { labels.clear(); accept(value); }; },
+    });
+  }
+  function press(label) {
+    const point = labels.get(label);
+    assert.ok(point,`找不到 ${label}`);
+    tap(...point);
+  }
+  function chooseGame() {
+    press('选玩家开局');
+    press('井字棋');
+  }
+  function winAsX() {
+    press('开始对局');
+    for (const point of [[78,228],[78,344],[195,228],[195,344],[312,228]]) tap(...point);
+    press('返回大厅');
+  }
+
+  launch();
+  chooseGame();
+  press('X · 游客');
+  press('新建玩家');
+  prompt('小林');
+  press('O · 游客');
+  assert.ok(!labels.has('小林'));
+  press('新建玩家');
+  prompt('小周');
+  winAsX();
+
+  chooseGame();
+  assert.ok(labels.has('沿用上次玩家'));
+  press('X · 游客');
+  press('小周');
+  press('O · 游客');
+  press('小林');
+  winAsX();
+
+  launch();
+  press('本机战绩');
+  assert.ok(labels.has('完成 3 局 · 平局 0 局'));
+  assert.equal(storage.get(KEY),legacy);
+  assert.deepEqual(JSON.parse(storage.get(JOURNAL_KEY)).matches.map(match => match.players),[[1,2],[2,1]]);
+  press('逐局历史');
+  press('小周获胜 · 2 人 ›');
+  assert.ok(labels.has('X · 小周 · 先手'));
+  assert.ok(labels.has('共 5 手'));
+  press('返回逐局历史');
+  press('好友交手榜');
+  assert.ok(labels.has('1. 小林 · 1 胜 / 2 局'));
+  assert.ok(labels.has('1. 小周 · 1 胜 / 2 局'));
+  press('选好友 A');
+  press('小林');
+  press('选好友 B');
+  press('小周');
+  assert.ok(labels.has('共同完成 2 局'));
+  assert.ok(labels.has('平局 0 · 其他玩家获胜 0'));
+  press('五子棋');
+  assert.ok(labels.has('共同完成 0 局'));
 });
