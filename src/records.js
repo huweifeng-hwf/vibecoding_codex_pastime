@@ -1,5 +1,6 @@
 'use strict';
 const { FINISH } = require('./flight');
+const EXTRA_GAMES = new Map(require('./extra-games').map(game => [game.id,game]));
 const KEY = 'duo.records.v1';
 const GOMOKU_KEY = 'duo.gomoku.records.v1';
 const JOURNAL_KEY = 'duo.localJournal.v1';
@@ -78,7 +79,10 @@ function loadJournal(storage) {
           return count === 2 && Number.isInteger(moves) &&
             (game !== 'ticTacToe' || winner === null || (Number.isInteger(winnerMoves) && winnerMoves >= 3 && winnerMoves <= 5));
         }
-        return (game === 'flight' || game === 'memory') && count >= 2 && count <= 4 &&
+        const extra = EXTRA_GAMES.get(game);
+        if (extra && !extra.scored) return count === 2 && Number.isInteger(moves) && moves >= 0;
+        return (game === 'flight' || game === 'memory' || extra?.scored) &&
+          count >= 2 && count <= (extra && !extra.variable ? 2 : 4) &&
           Array.isArray(scores) && scores.length === count && scores.every(Number.isInteger) &&
           (game !== 'flight' || winner !== null);
       });
@@ -89,7 +93,7 @@ function finishedMatch(id, game, players, first, endedAt = Date.now()) {
   const seats = BOARD_SEATS[id];
   const winner = game.winner === null || !seats ? game.winner : seats.indexOf(game.winner);
   const match = { game: id, players: players.slice(), first, winner, endedAt };
-  if (id === 'memory') match.scores = game.scores.slice();
+  if (id === 'memory' || EXTRA_GAMES.get(id)?.scored) match.scores = game.scores.slice();
   else if (id === 'flight') match.scores = game.planes.map(pair => pair.filter(progress => progress === FINISH).length);
   else match.moves = game.moves;
   if (id === 'ticTacToe' && winner !== null) match.winnerMoves = game.board.filter(value => value === game.winner).length;
