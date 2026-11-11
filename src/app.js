@@ -5,13 +5,18 @@ const Memory = require('./memory');
 const Flight = require('./flight');
 const Records = require('./records');
 const { createOnline } = require('./online');
+const EXTRA_GAMES = require('./extra-games');
+const { createExtraUI } = require('./extra-ui');
 
 const GAMES = [
   { id: 'ticTacToe', title: '井字棋', description: '2 人 · 连成三子' },
   { id: 'gomoku', title: '五子棋', description: '2 人 · 自由连五' },
   { id: 'memory', title: '翻牌配对', description: '2–4 人 · 记忆对战', start: '开始配对', rules: Memory },
   { id: 'flight', title: '飞行棋', description: '2–4 人 · 双机快局', start: '开始飞行', rules: Flight },
+  ...EXTRA_GAMES,
 ];
+const EXTRA_IDS = new Set(EXTRA_GAMES.map(({id}) => id));
+const variableCount = id => id === 'flight' || id === 'memory' || EXTRA_GAMES.some(game => game.id === id && game.variable);
 const PLAYER_COUNTS = [2, 3, 4];
 const RECORD_TABS = [['seats','座位统计'],['history','逐局历史'],['friends','好友交手榜'],['profiles','玩家档案']];
 const SEATING_KEY = 'duo.seating.v1';
@@ -37,7 +42,7 @@ function start(platform) {
   const friends = [null,null];
   let activeGame = GAMES[0].id, recordsGame = GAMES[0].id, playerCount = 2, recordsCount = 2;
   const multiplayerRecords = new Map(GAMES.filter(game => game.rules).map(({ id }) => [
-    id, new Map(PLAYER_COUNTS.map(count => [count, Records.loadMultiplayer(storage, id, count)])),
+    id, new Map((variableCount(id) ? PLAYER_COUNTS : [2]).map(count => [count, Records.loadMultiplayer(storage, id, count)])),
   ]));
   journal.matches.forEach(updateSeatStats);
   const online = platform.roomCall ? createOnline(platform.roomCall, storage, render) : null;
@@ -62,6 +67,33 @@ function start(platform) {
   const isArchived = id => journal.archivedProfiles?.includes(id) ?? false;
   const matchPlayer = (match,seat) => nickname(match.players[seat]) || `游客 ${seatName(match.game,seat)}`;
   const namedPlayer = seat => nickname(roundPlayers[seatIndex(activeGame,seat)]);
+  const requestFrame = platform.requestFrame || (fn => setTimeout(() => fn(Date.now()),16));
+  const extraUI = createExtraUI({
+    ctx,text,box,button,seatText,seatButton,roundControls,saveStatus,render,requestFrame,
+    label: seat => namedPlayer(seat) || playerLabel(seat),
+    hit: button => buttons.push(button),
+    update: next => {
+      if (next === game) return;
+      game = next;
+      if (game.winner !== null || game.draw) saveMatch();
+      render();
+    },
+    animate: step => {
+      const running = game;
+      let previous;
+      const frame = time => {
+        if (scene !== 'game' || game !== running) return;
+        const seconds = previous === undefined ? 0 : Math.max(0,Math.min(0.075,(time-previous)/1000));
+        previous = time;
+        step(running,seconds);
+        if (running.winner !== null) saveMatch();
+        render();
+        if (running.phase === 'playing') requestFrame(frame);
+      };
+      render();
+      requestFrame(frame);
+    },
+  });
   const boardRoster = () => roundPlayers.some(id => id !== null)
     ? roundPlayers.map((id,i) => `${seatName(activeGame,i)} · ${nickname(id) || '游客'}`).join('    ')
     : '';
@@ -83,9 +115,13 @@ function start(platform) {
       openRoster(back,back === 'chooseGame' ? starterProfile : null);
       return;
     }
-    if (multiplayerRecords.has(id)) {
+    if (variableCount(id)) {
       scene = 'setup';
       render();
+      return;
+    }
+    if (EXTRA_IDS.has(id)) {
+      startMultiplayer(0);
       return;
     }
     newRound();
@@ -95,6 +131,7 @@ function start(platform) {
     const { rules } = GAMES.find(({ id }) => id === activeGame);
     rollingFlight = null;
     movingFlight = null;
+    extraUI.reset();
     finishedMatch = null;
     roundFirst = firstSeat;
     game = rules.createGame(playerCount, firstSeat);
@@ -247,7 +284,7 @@ function start(platform) {
       }
       newRound(done ? 1-roundFirst : roundFirst);
     };
-    const leave = () => { scene = 'home'; render(); };
+    const leave = () => { extraUI.reset(); scene = 'home'; render(); };
     return {
       restart: () => done ? restart() : confirm('重新开局？未完成的对局不计入战绩。', restart),
       leave: () => done ? leave() : confirm('离开本局？未完成的对局不计入战绩。', leave),
@@ -269,17 +306,22 @@ function start(platform) {
     return saved ? '战绩已保存在本机' : '保存失败，本次战绩仅在当前会话有效';
   }
 
-  function drawGameCards(left, top, w, choosePlayers = false) {
-    const cardWidth = (w-12)/2;
+  function drawGameCards(left, top, w, footerHeight, choosePlayers = false) {
+    const gap = 8, cardWidth = (w-gap)/2, rows = Math.ceil(GAMES.length/2);
+    const gridTop = top+88, footerGap = 11, rowsGap = (rows-1)*gap;
+    const available = height-safeBottom-8-gridTop-rowsGap-footerGap-footerHeight;
+    const cardHeight = Math.min(61,available/rows);
+    const playHeight = choosePlayers ? cardHeight : cardHeight-22;
     GAMES.forEach(({ id, title, description }, i) => {
-      const x = left+(i%2)*(cardWidth+12);
-      const y = top+150+Math.floor(i/2)*110;
-      box(x,y,cardWidth,96,colors.panel);
-      text(title,x+cardWidth/2,y+(choosePlayers ? 32 : 24),22);
-      text(description,x+cardWidth/2,y+(choosePlayers ? 63 : 48),13,colors.muted);
-      buttons.push({x,y,w:cardWidth,h:choosePlayers ? 96 : 63,action:() => openGame(id,choosePlayers)});
-      if (!choosePlayers) button('选玩家 ›',x,y+63,cardWidth,33,() => openGame(id,true,'home'),'#2a3957',14);
+      const x = left+(i%2)*(cardWidth+gap);
+      const y = gridTop+Math.floor(i/2)*(cardHeight+gap);
+      box(x,y,cardWidth,cardHeight,colors.panel);
+      text(title,x+cardWidth/2,y+playHeight*0.33,16);
+      text(description,x+cardWidth/2,y+playHeight*0.78,11,colors.muted);
+      buttons.push({x,y,w:cardWidth,h:playHeight,action:() => openGame(id,choosePlayers)});
+      if (!choosePlayers) button('选玩家 ›',x,y+playHeight,cardWidth,22,() => openGame(id,true,'home'),'#2a3957',11);
     });
+    return gridTop+rows*cardHeight+rowsGap+footerGap;
   }
 
   function countButtons(left, y, w, selected, select) {
@@ -348,7 +390,7 @@ function start(platform) {
 
   function drawRoster(cx,top,left,w) {
     const { title } = GAMES.find(item => item.id === activeGame);
-    const multiplayer = multiplayerRecords.has(activeGame);
+    const multiplayer = variableCount(activeGame);
     text(`${title} · 选择玩家`,cx,top+68,24);
     if (multiplayer) countButtons(left,top+98,w,playerCount,count => {
       draftPlayers = Array.from({length:count},(_,i) => draftPlayers[i] ?? null);
@@ -947,13 +989,15 @@ function start(platform) {
 
   function drawMatchDetail(cx,top,left,w) {
     const match = selectedMatch;
+    const extra = EXTRA_GAMES.find(item => item.id === match.game);
     text(GAMES.find(item => item.id === match.game).title,cx,top+70,26);
     text(`${dateLabel(match.endedAt)} · ${match.players.length} 人`,cx,top+106,14,colors.muted);
     text(outcomeLabel(match),cx,top+145,24);
-    if (match.moves !== undefined) text(`共 ${match.moves} 手`,cx,top+173,13,colors.muted);
+    if (match.moves !== undefined) text(`共 ${match.moves} ${extra?.unit || '手'}`,cx,top+173,13,colors.muted);
     match.players.forEach((_,i) => {
       const y = top+195+i*48;
-      const score = match.scores ? ` · ${match.scores[i]} ${match.game === 'memory' ? '对' : '架送达'}` : '';
+      const unit = extra?.unit || (match.game === 'memory' ? '对' : '架送达');
+      const score = match.scores ? ` · ${match.scores[i]} ${unit}` : '';
       box(left,y,w,42,colors.panel);
       text(`${seatName(match.game,i)} · ${matchPlayer(match,i)}${i === match.first ? ' · 先手' : ''}${score}`,cx,y+21,14);
     });
@@ -1070,13 +1114,14 @@ function start(platform) {
 
   function drawSeatStats(cx,top,left,w) {
     const recordsByCount = multiplayerRecords.get(recordsGame);
-    const stats = recordsByCount ? recordsByCount.get(recordsCount) :
+    const count = variableCount(recordsGame) ? recordsCount : 2;
+    const stats = recordsByCount ? recordsByCount.get(count) :
       recordsGame === 'gomoku' ? gomokuRecords : records;
     const statsY = recordsByCount ? top+219 : top+175;
     const summary = `完成 ${stats.rounds} 局`;
     text(recordsGame === 'flight' ? summary : `${summary} · 平局 ${stats.draws} 局`,cx,statsY,17,colors.muted);
     if (recordsByCount) {
-      countButtons(left,top+156,w,recordsCount,count => { recordsCount = count; render(); });
+      if (variableCount(recordsGame)) countButtons(left,top+156,w,count,value => { recordsCount = value; render(); });
       stats.wins.forEach((wins,seat) => {
         const y = top+242+seat*43;
         box(left,y,w,37,colors.panel);
@@ -1097,18 +1142,22 @@ function start(platform) {
     text('本机战绩',cx,top+69,29);
     if (recordsTab === 'profiles') drawProfiles(cx,top,left,w);
     else {
-      const tabWidth = (w-16)/GAMES.length;
-      GAMES.forEach(({ id, title },i) => {
+      const size = 4, offset = Math.floor(GAMES.findIndex(item => item.id === recordsGame)/size)*size;
+      const tabWidth = (w-16)/size;
+      const select = id => { recordsGame = id; page = 0; render(); };
+      if (offset > 0) button('上组',left,top+53,53,31,() => select(GAMES[offset-size].id),colors.panel,13);
+      if (offset+size < GAMES.length) {
+        button('下组',left+w-53,top+53,53,31,() => select(GAMES[offset+size].id),colors.panel,13);
+      }
+      GAMES.slice(offset,offset+size).forEach(({ id, title },i) => {
         button(title,left+i*(tabWidth+8),top+105,tabWidth,42,() => {
-          recordsGame = id;
-          page = 0;
-          render();
-        },recordsGame === id ? '#395a69' : colors.panel,15);
+          select(id);
+        },recordsGame === id ? '#395a69' : colors.panel,Math.min(15,(tabWidth-4)/[...title].length));
       });
       if (recordsTab === 'seats') drawSeatStats(cx,top,left,w);
       else {
-        const count = multiplayerRecords.has(recordsGame) ? recordsCount : 2;
-        if (multiplayerRecords.has(recordsGame)) countButtons(left,top+156,w,count,value => {
+        const count = variableCount(recordsGame) ? recordsCount : 2;
+        if (variableCount(recordsGame)) countButtons(left,top+156,w,count,value => {
           recordsCount = value;
           page = 0;
           render();
@@ -1134,33 +1183,33 @@ function start(platform) {
   function render() {
     buttons = []; box(0,0,width,height,colors.bg);
     const cx = width/2, top = Math.max(30, platform.safeTop || 0), w = Math.min(width-40,400), left = cx-w/2;
-    const seatingGame = scene === 'game' && (!multiplayerRecords.has(activeGame) || playerCount === 2);
+    const extraGame = scene === 'game' && EXTRA_IDS.has(activeGame);
+    const seatingGame = scene === 'game' && !extraGame && (!multiplayerRecords.has(activeGame) || playerCount === 2);
     if (seatingGame && facing) { drawFacing(cx,top,left,w); return; }
     if (seatingGame) button('座位：并排 · 切换面对面',left,top,w,34,toggleSeating);
-    else text('DUO / 一起玩',cx,top+15,15,colors.O);
+    else if (!extraGame || (activeGame !== 'pong' && activeGame !== 'hockey')) text('DUO / 一起玩',cx,top+15,15,colors.O);
     if (scene === 'home') {
-      text('双人互动小游戏大全',cx,top+76,26);
-      text('一块屏幕，轮流玩，一点胜负欲。',cx,top+115,15,colors.muted);
-      drawGameCards(left,top,w);
-      if (online) button('井字棋 · 好友联机',left,top+369,w,49,() => {
+      text('一起玩 · 11 款同屏游戏',cx,top+53,24);
+      const footerY = drawGameCards(left,top,w,online ? 77 : 39);
+      if (online) button('井字棋 · 好友联机',left,footerY,w,31,() => {
         scene = 'online';
         online.open();
         render();
       },'#395a69');
-      button('本机战绩',left,top+434,w,50,()=>{scene='records';render();});
-      const half = (w-8)/2;
-      button('选玩家开局',left,top+493,half,42,() => {
+      const actionY = footerY+(online ? 38 : 0);
+      const third = (w-12)/3;
+      button('本机战绩',left,actionY,third,39,()=>{scene='records';render();},colors.panel,14);
+      button('选玩家开局',left+third+6,actionY,third,39,() => {
         starterProfile = null;
         go('chooseGame');
-      });
-      button('玩家档案',left+half+8,top+493,half,42,() => {
+      },colors.panel,14);
+      button('玩家档案',left+2*(third+6),actionY,third,39,() => {
         recordsTab = 'profiles';
         showArchived = false;
         page = 0;
         profileMessage = '';
         go('records');
-      });
-      text('无需登录 · 战绩仅保存在此设备',cx,top+557,13,colors.muted);
+      },colors.panel,14);
     } else if (scene === 'online' || scene === 'roomCode') {
       drawOnline(cx,top,left,w);
     } else if (scene === 'setup') {
@@ -1168,7 +1217,7 @@ function start(platform) {
       text(title,cx,top+76,29);
       text('选择同屏玩家人数',cx,top+123,17,colors.muted);
       countButtons(left,top+150,w,playerCount,count => { playerCount = count; render(); });
-      button(start,left,top+218,w,48,() => startWithPlayers(Array(playerCount).fill(null)),'#395a69');
+      button(start || '开始对局',left,top+218,w,48,() => startWithPlayers(Array(playerCount).fill(null)),'#395a69');
       button('返回大厅',left,top+280,w,46,() => { scene = 'home'; render(); });
       if (activeGame === 'flight') {
         box(left,top+350,w,125,colors.panel);
@@ -1180,10 +1229,10 @@ function start(platform) {
       }
       button('选本机玩家',left,top+(activeGame === 'flight' ? 487 : 339),w,42,() => openRoster('setup'));
     } else if (scene === 'chooseGame') {
-      text('选玩家开局',cx,top+76,26);
-      text(starterProfile ? `已选 ${nickname(starterProfile)}，请选择游戏` : '先选游戏，再给座位选玩家',cx,top+115,15,colors.muted);
-      drawGameCards(left,top,w,true);
-      button(starterProfile ? '返回玩家档案' : '返回大厅',left,top+434,w,50,() => go(starterProfile ? 'profileDetail' : 'home'));
+      text('选玩家开局',cx,top+50,24);
+      if (starterProfile) text(`已选 ${nickname(starterProfile)}`,cx,top+72,13,colors.muted);
+      const footerY = drawGameCards(left,top,w,40,true);
+      button(starterProfile ? '返回玩家档案' : '返回大厅',left,footerY,w,40,() => go(starterProfile ? 'profileDetail' : 'home'));
     } else if (scene === 'roster') {
       drawRoster(cx,top,left,w);
     } else if (scene === 'profilePicker') {
@@ -1194,6 +1243,8 @@ function start(platform) {
       drawProfileDetail(cx,top,left,w);
     } else if (scene === 'records') {
       drawRecords(cx,top,left,w);
+    } else if (extraGame) {
+      extraUI.draw(activeGame,game,{cx,top,left,w,bottom:height-safeBottom});
     } else if (activeGame === 'flight') {
       drawFlight(cx,top,left,w);
     } else if (activeGame === 'memory') {
@@ -1212,6 +1263,9 @@ function start(platform) {
     }
   }
   function resize() { const info=platform.size(); scale=Math.min(1,info.height/650);width=info.width/scale; height=info.height/scale; safeBottom=(info.safeBottom || 0)/scale; const dpr=info.dpr||1; canvas.width=Math.round(info.width*dpr);canvas.height=Math.round(info.height*dpr);ctx.setTransform(dpr*scale,0,0,dpr*scale,0,0);render(); }
+  platform.onPointer?.((type,id,x,y) => {
+    if (scene === 'game' && EXTRA_IDS.has(activeGame)) extraUI.pointer(type,id,x/scale,y/scale);
+  });
   platform.onTap((x,y)=>{x/=scale;y/=scale;const hit=buttons.find(b=>x>=b.x&&x<b.x+b.w&&y>=b.y&&y<b.y+b.h);if(hit)hit.action(x,y);});
   platform.onResize(resize); resize();
 }

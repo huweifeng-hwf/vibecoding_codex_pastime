@@ -1,7 +1,36 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const {start}=require('../src/app');const {JOURNAL_KEY}=require('../src/records');
 function fixture(){let tap,resize,data,fail=false;const labels=[];const ctx={fillRect(){},setTransform(){},fillText(t){labels.push(t);}};const canvas={getContext:()=>ctx};start({canvas,size:()=>({width:390,height:844,dpr:2}),storage:{get:()=>data,set:(k,v)=>{if(fail)throw Error();data=v;}},onTap:f=>tap=f,onResize:f=>resize=f,confirm:(m,yes)=>yes()});return {labels,tap:(x,y)=>tap(x,y),resize:()=>resize(),get data(){return JSON.parse(data);},fail:()=>fail=true};}
-test('大厅到获胜、重复点击只记一次、重开与战绩页',()=>{const f=fixture();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.equal(f.data.matches.length,1);assert.equal(f.data.matches[0].winner,0);f.tap(312,228);assert.equal(f.data.matches.length,1);f.resize();assert.equal(f.data.matches.length,1);assert.ok(f.labels.includes('玩家 X 获胜！'));f.tap(195,650);f.tap(195,490);assert.ok(f.labels.includes('玩家 X · 1 胜'));});
-test('存储失败仍能结算并显示提示',()=>{const f=fixture();f.fail();f.tap(110,228);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.ok(f.labels.some(t=>t.includes('保存失败')));});
+test('大厅到获胜、重复点击只记一次、重开与战绩页',()=>{const f=fixture();f.tap(110,135);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.equal(f.data.matches.length,1);assert.equal(f.data.matches[0].winner,0);f.tap(312,228);assert.equal(f.data.matches.length,1);f.resize();assert.equal(f.data.matches.length,1);assert.ok(f.labels.includes('玩家 X 获胜！'));f.tap(195,650);f.tap(75,554);assert.ok(f.labels.includes('玩家 X · 1 胜'));});
+test('存储失败仍能结算并显示提示',()=>{const f=fixture();f.fail();f.tap(110,135);for(const [x,y] of [[78,228],[78,344],[195,228],[195,344],[312,228]])f.tap(x,y);assert.ok(f.labels.some(t=>t.includes('保存失败')));});
+
+test('小屏首页和选玩家开局都能直接选择最后一款游戏', () => {
+  const width=320, height=568, scale=height/650;
+  const titles=['井字棋','五子棋','翻牌配对','飞行棋','重力连四','挡路竞速','掷骰封盒',
+    '双人 Pong','空气曲棍球','飞镖快赛','八球台球'];
+  let labels=[], tap;
+  start({
+    canvas:{getContext:()=>({
+      fillRect(){}, setTransform(){}, fillText(title,x,y){labels.push({title,x,y});},
+    })},
+    size:()=>({width,height,safeTop:44,safeBottom:34}),
+    storage:{get(){}}, onTap:handler=>{tap=handler;}, onResize(){},
+  });
+  const find=title=>labels.find(item=>item.title===title);
+  const press=title=>{
+    const {x,y}=find(title);
+    labels=[];
+    tap(x*scale,y*scale);
+  };
+  function checkGames() {
+    assert.ok(titles.every(title=>find(title)?.y*scale<height-34));
+    assert.equal(find('下一页'),undefined);
+  }
+  checkGames();
+  press('选玩家开局');
+  checkGames();
+  press('八球台球');
+  assert.ok(find('开始对局'));
+});
 
 test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () => {
   const { KEY } = require('../src/records');
@@ -30,7 +59,7 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
     onResize() {},
     confirm: (_, yes) => { accept = yes; },
   });
-  tap(235, 228);
+  tap(235, 135);
   assert.ok(labels.includes('黑方落子'));
   assert.ok(labels.includes('轻点空交叉点落子'));
   tap(289, 409);
@@ -60,11 +89,11 @@ test('小屏五子棋单击落子、取消退出、再战及战绩隔离', () =>
   assert.ok(labels.includes('白方落子'));
   tap(160, 550);
   accept();
-  tap(235, 228);
+  tap(235, 135);
   assert.ok(labels.includes('黑方落子'));
   tap(160, 550);
   accept();
-  tap(160, 489);
+  tap(64, 554);
   assert.ok(labels.includes('最快获胜：3 次落子'));
   tap(125, 155);
   assert.ok(labels.includes('黑方 · 1 胜'));

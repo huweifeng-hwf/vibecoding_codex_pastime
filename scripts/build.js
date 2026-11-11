@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'..');
 const onlineEnv = process.env.DUO_CLOUD_ENV;
 if (onlineEnv && !/^[a-zA-Z0-9-]{1,100}$/.test(onlineEnv)) throw new Error('Invalid DUO_CLOUD_ENV');
-function bundle(entry){const names=['game','gomoku','memory','flight','records','online','app',entry];return `(function(){const modules={${names.map(n=>`${JSON.stringify('./'+n)}:function(require,module,exports){\n${fs.readFileSync(path.join(root,'src',n+'.js'),'utf8')}\n}`).join(',')}};const cache={};function require(n){if(cache[n])return cache[n].exports;const m={exports:{}};cache[n]=m;modules[n](require,m,m.exports);return m.exports;}require('./${entry}');})();`;}
+function bundle(entry){const names=['game','gomoku','memory','flight','grid-games','score-games','table-games','extra-games','extra-ui','records','online','app',entry];return `(function(){const modules={${names.map(n=>`${JSON.stringify('./'+n)}:function(require,module,exports){\n${fs.readFileSync(path.join(root,'src',n+'.js'),'utf8')}\n}`).join(',')}};const cache={};function require(n){if(cache[n])return cache[n].exports;const m={exports:{}};cache[n]=m;modules[n](require,m,m.exports);return m.exports;}require('./${entry}');})();`;}
 fs.mkdirSync(path.join(root,'dist/web'),{recursive:true});
 fs.writeFileSync(path.join(root,'dist/web/game.js'),bundle('browser'));
 fs.copyFileSync(path.join(root,'web/index.html'),path.join(root,'dist/web/index.html'));

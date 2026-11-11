@@ -7,7 +7,7 @@
     "test": "node --test \"tests/*.test.js\"",
     "build": "node scripts/build.js",
     "dev": "node scripts/serve.js",
-    "check": "node --check src/app.js && node --check src/game.js && node --check src/gomoku.js && node --check src/memory.js && node --check src/flight.js && node --check src/records.js && node --check src/online.js && node --check src/wechat.js && node --check cloud/duoRoom/index.js && node --check cloud/duoRoom/room.js && node --check src/browser.js && node --check scripts/build.js",
+    "check": "node --check src/app.js && node --check src/game.js && node --check src/gomoku.js && node --check src/memory.js && node --check src/flight.js && node --check src/grid-games.js && node --check src/score-games.js && node --check src/table-games.js && node --check src/extra-games.js && node --check src/extra-ui.js && node --check src/records.js && node --check src/online.js && node --check src/wechat.js && node --check cloud/duoRoom/index.js && node --check cloud/duoRoom/room.js && node --check src/browser.js && node --check scripts/build.js",
     "build:android": "node scripts/build.js --web-only && cap sync android && cd android && ./gradlew assembleDebug"
   },
   "engines": {

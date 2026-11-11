@@ -17,11 +17,29 @@ async function callRoom(request) {
 const canvas = wx.createCanvas();
 const info = wx.getWindowInfo();
 let pending = false;
+let pointerStart;
 start({ canvas, safeTop: (info.safeArea && info.safeArea.top) || 30,
   size: () => { const i=wx.getWindowInfo(); return {width:i.windowWidth,height:i.windowHeight,dpr:i.pixelRatio,
     safeBottom:Math.max(0,i.windowHeight-(i.safeArea?.bottom ?? i.windowHeight))}; },
   storage: { get: key => wx.getStorageSync(key), set: (key,value) => wx.setStorageSync(key,value) },
-  onTap: handler => { wx.onTouchStart(event => { if(pending || event.touches.length !== 1)return; const t=event.touches[0]; handler(t.clientX,t.clientY); }); },
+  onTap: handler => wx.onTouchStart(event => {
+    if (pending) return;
+    pointerStart?.(event);
+    if (event.touches.length === 1) {
+      const touch = event.touches[0];
+      handler(touch.clientX,touch.clientY);
+    }
+  }),
+  onPointer: handler => {
+    const dispatch = type => event => {
+      if (pending) return;
+      for (const touch of event.changedTouches || []) handler(type,touch.identifier,touch.clientX,touch.clientY);
+    };
+    pointerStart = dispatch('down');
+    wx.onTouchMove?.(dispatch('move'));
+    wx.onTouchEnd?.(dispatch('up'));
+    wx.onTouchCancel?.(dispatch('cancel'));
+  },
   roomCall: onlineEnv !== '__DUO_'+'CLOUD_ENV__' && typeof wx.cloud?.callFunction === 'function' ? callRoom : null,
   onVisibility: handler => { wx.onShow(() => handler(true)); wx.onHide(() => handler(false)); },
   onResize: handler => wx.onWindowResize(handler),
